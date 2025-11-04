@@ -1,0 +1,136 @@
+# KubeTUI Configuration Example
+# Copy this file to ~/.kubetui/config.yaml and customize as needed
+
+# Refresh interval for auto-updating pod status and other resources
+# Supported units: s (seconds), m (minutes), h (hours)
+# Default: 5s
+refresh_interval: 5s
+
+# Number of log lines to tail when viewing pod logs
+# Default: 100
+log_tail_lines: 100
+
+# UI theme: dark or light
+# Default: dark
+theme: dark
+
+# Favorite contexts and namespaces for quick access
+# These will be highlighted in the selection menus
+favorites:
+  namespaces:
+    - default
+    - kube-system
+    - production
+    - staging
+    - development
+  contexts:
+    - minikube
+    - kind-dev
+    - prod-cluster
+    - staging-cluster
+
+# Customize keyboard shortcuts
+# Use single characters or function keys (f1-f12)
+# Avoid conflicts with system shortcuts
+key_bindings:
+  # Pod actions
+  logs: l              # View pod logs
+  delete: d            # Delete pod
+  describe: D          # Describe pod (detailed info)
+  exec: e              # Exec into pod (shell)
+  port_forward: p      # Port-forward to pod
+
+  # General actions
+  refresh: r           # Manually refresh data
+  filter: f            # Filter by labels
+  search: /            # Global search
+  help: "?"            # Show help screen
+
+  # Navigation (alternative keys)
+  # The default arrow keys and j/k always work
+  # You can add additional bindings here if desired
+
+# Display preferences
+display:
+  # Show timestamps in logs
+  # Default: true
+  show_timestamps: true
+
+  # Compact mode - reduces spacing for more content on screen
+  # Default: false
+  compact_mode: false
+
+  # Maximum length for resource names before truncation
+  # Default: 50
+  max_name_length: 50
+
+  # Show full resource names without truncation
+  # Overrides max_name_length
+  # Default: false
+  show_full_names: false
+
+  # Number of decimal places for resource metrics (CPU, Memory)
+  # Default: 2
+  metrics_precision: 2
+
+# Advanced settings
+advanced:
+  # Enable debug logging
+  # Logs will be written to ~/.kubetui/debug.log
+  # Default: false
+  debug: false
+
+  # Connection timeout for Kubernetes API calls
+  # Default: 30s
+  api_timeout: 30s
+
+  # Maximum number of concurrent API requests
+  # Higher values = faster but more resource intensive
+  # Default: 10
+  max_concurrent_requests: 10
+
+  # Enable experimental features
+  # Default: false
+  experimental: false
+
+# Resource filters
+# Pre-define filters for common use cases
+filters:
+  # Show only running pods
+  running_pods:
+    resource: pods
+    field: status.phase
+    value: Running
+
+  # Show only failed pods
+  failed_pods:
+    resource: pods
+    field: status.phase
+    value: Failed
+
+  # Show pods with specific labels
+  api_pods:
+    resource: pods
+    label: app=api
+
+# Custom aliases for quick access
+# Press the number key to quickly switch to that resource view
+aliases:
+  "1": pods
+  "2": deployments
+  "3": services
+  "4": configmaps
+  "5": secrets
+  "6": ingresses
+  "7": statefulsets
+  "8": daemonsets
+  "9": jobs
+
+# Notifications (future feature)
+# Configure alerts for specific events
+notifications:
+  enabled: false
+  events:
+    - pod_failed
+    - pod_crashloop
+    - deployment_rollout_failed

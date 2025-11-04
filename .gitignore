@@ -1,0 +1,77 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+kubetui
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+coverage.txt
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Build directories
+bin/
+dist/
+build/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug and log files
+*.log
+debug.log
+
+# Configuration files (don't commit personal configs)
+config.yaml
+.kubetui/
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# GoReleaser artifacts
+.goreleaser.yml.bak
+
+# Air (live reload) temp files
+tmp/
+
+# OS-specific files
+Thumbs.db
+.DS_Store
+
+# Kubernetes config (never commit these!)
+*.kubeconfig
+kubeconfig*
+
+# Environment files
+.env
+.env.local
+
+# Test coverage
+profile.cov
+
+# Documentation build artifacts
+docs/_build/
+
+# Snapcraft
+*.snap
+prime/
+stage/
+parts/

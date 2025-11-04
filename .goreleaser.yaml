@@ -1,0 +1,210 @@
+# GoReleaser configuration for kubetui
+# https://goreleaser.com
+
+project_name: kubetui
+
+before:
+  hooks:
+    # Tidy up go modules
+    - go mod tidy
+    # Run tests before building
+    - go test ./...
+
+builds:
+  - id: kubetui
+    main: ./cmd/kubetui
+    binary: kubetui
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    # Ignore combinations that don't make sense
+    ignore:
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: kubetui
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - config.example.yaml
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^style:"
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+  groups:
+    - title: "New Features"
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: "Enhancements"
+      regexp: "^.*enh[(\\w)]*:+.*$"
+      order: 2
+    - title: "Others"
+      order: 999
+
+release:
+  github:
+    owner: Xenon1507
+    name: k8s-tui
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: |
+    ## KubeTUI {{ .Tag }} ({{ .Date }})
+
+    Welcome to this new release of KubeTUI!
+
+  footer: |
+    ## Installation
+
+    ### Binary
+
+    Download the appropriate binary for your platform from the assets below.
+
+    ### Homebrew (macOS/Linux)
+
+    ```bash
+    brew install Xenon1507/tap/kubetui
+    ```
+
+    ### Go Install
+
+    ```bash
+    go install github.com/Xenon1507/k8s-tui/cmd/kubetui@{{ .Tag }}
+    ```
+
+    **Full Changelog**: https://github.com/Xenon1507/k8s-tui/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Homebrew tap
+brews:
+  - name: kubetui
+    repository:
+      owner: Xenon1507
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    folder: Formula
+    homepage: https://github.com/Xenon1507/k8s-tui
+    description: "A modern, powerful Terminal UI for Kubernetes management"
+    license: MIT
+    test: |
+      system "#{bin}/kubetui", "--version"
+    install: |
+      bin.install "kubetui"
+
+# Snapcraft (Linux snap package)
+snapcrafts:
+  - name: kubetui
+    summary: Modern Kubernetes TUI
+    description: |
+      KubeTUI is a modern, powerful Terminal UI for Kubernetes management.
+      Built with Bubble Tea framework for a delightful user experience.
+
+      Features:
+      - Multi-context and namespace support
+      - Real-time pod management
+      - Resource views for deployments, services, and more
+      - Beautiful, responsive UI
+      - Vim-style keybindings
+
+    grade: stable
+    confinement: classic
+    license: MIT
+    base: core22
+    publish: true
+
+# Docker images
+dockers:
+  - image_templates:
+      - "ghcr.io/xenon1507/kubetui:{{ .Tag }}-amd64"
+      - "ghcr.io/xenon1507/kubetui:latest-amd64"
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
+  - image_templates:
+      - "ghcr.io/xenon1507/kubetui:{{ .Tag }}-arm64"
+      - "ghcr.io/xenon1507/kubetui:latest-arm64"
+    use: buildx
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+
+docker_manifests:
+  - name_template: "ghcr.io/xenon1507/kubetui:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/xenon1507/kubetui:{{ .Tag }}-amd64"
+      - "ghcr.io/xenon1507/kubetui:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/xenon1507/kubetui:latest"
+    image_templates:
+      - "ghcr.io/xenon1507/kubetui:latest-amd64"
+      - "ghcr.io/xenon1507/kubetui:latest-arm64"
+
+# Announcement
+announce:
+  skip: "{{gt .Patch 0}}"
+  twitter:
+    enabled: false
+  mastodon:
+    enabled: false
+  reddit:
+    enabled: false
+  slack:
+    enabled: false
+  discord:
+    enabled: false
