@@ -403,10 +403,15 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.loadPods()
 		}
 	case "/":
-		if !m.ShowHelp && !m.ShowConfirm && m.CurrentPanel == PanelList {
-			m.SearchActive = true
-			m.SearchQuery = ""
-			return m, nil
+		if !m.ShowHelp && !m.ShowConfirm {
+			// Only activate search in list views (not in detail/log panels)
+			if m.CurrentPanel == PanelList || m.CurrentPanel == PanelDetail {
+				m.SearchActive = true
+				m.SearchQuery = ""
+				// Switch to list panel when activating search
+				m.CurrentPanel = PanelList
+				return m, nil
+			}
 		}
 	}
 
@@ -420,7 +425,32 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			// Stay in search mode but could add special behavior here
+			// Enter exits search mode
+			m.SearchActive = false
+			return m, nil
+		case "up", "k":
+			// Allow navigation during search on filtered results
+			if m.Cursor > 0 {
+				m.Cursor--
+			}
+			return m, nil
+		case "down", "j":
+			// Allow navigation during search on filtered results
+			maxCursor := 0
+			// Get max based on filtered results (we'll use original lists for now)
+			switch m.CurrentView {
+			case ViewPods:
+				maxCursor = len(m.Pods) - 1
+			case ViewDeployments:
+				maxCursor = len(m.Deployments) - 1
+			case ViewServices:
+				maxCursor = len(m.Services) - 1
+			case ViewNodes:
+				maxCursor = len(m.Nodes) - 1
+			}
+			if m.Cursor < maxCursor {
+				m.Cursor++
+			}
 			return m, nil
 		default:
 			// Handle regular character input
@@ -429,6 +459,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.Cursor = 0 // Reset cursor on query change
 				return m, nil
 			}
+			// Important: Return here to prevent falling through to other handlers
+			return m, nil
 		}
 	}
 
