@@ -247,3 +247,82 @@ func GetStatusColor(phase string, ready string) string {
 		return "gray"
 	}
 }
+
+// GetNodes returns all nodes in the cluster
+func (c *Client) GetNodes(ctx context.Context) ([]corev1.Node, error) {
+	list, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// NodeMetrics represents CPU and memory metrics for a node
+type NodeMetrics struct {
+	CPUUsage    int64  // CPU usage in nanocores
+	MemoryUsage int64  // Memory usage in bytes
+	CPUPercent  float64 // CPU usage percentage
+	MemPercent  float64 // Memory usage percentage
+}
+
+// GetNodeMetrics returns metrics for all nodes
+func (c *Client) GetNodeMetrics(ctx context.Context) (map[string]*NodeMetrics, error) {
+	if c.metricsClient == nil {
+		return nil, fmt.Errorf("metrics server not available")
+	}
+
+	// Get metrics from metrics server
+	nodeMetricsList, err := c.metricsClient.MetricsV1beta1().NodeMetricses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node metrics: %w", err)
+	}
+
+	// Get nodes to calculate capacity
+	nodes, err := c.GetNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nodes: %w", err)
+	}
+
+	// Create a map of node capacities
+	nodeCapacity := make(map[string]struct {
+		cpu    int64
+		memory int64
+	})
+	for _, node := range nodes {
+		cpuCap := node.Status.Allocatable.Cpu().MilliValue()
+		memCap := node.Status.Allocatable.Memory().Value()
+		nodeCapacity[node.Name] = struct {
+			cpu    int64
+			memory int64
+		}{
+			cpu:    cpuCap,
+			memory: memCap,
+		}
+	}
+
+	// Build metrics map
+	metrics := make(map[string]*NodeMetrics)
+	for _, nodeMetric := range nodeMetricsList.Items {
+		cpuUsage := nodeMetric.Usage.Cpu().MilliValue()
+		memUsage := nodeMetric.Usage.Memory().Value()
+
+		metric := &NodeMetrics{
+			CPUUsage:    cpuUsage,
+			MemoryUsage: memUsage,
+		}
+
+		// Calculate percentages if capacity is available
+		if cap, ok := nodeCapacity[nodeMetric.Name]; ok {
+			if cap.cpu > 0 {
+				metric.CPUPercent = float64(cpuUsage) / float64(cap.cpu) * 100
+			}
+			if cap.memory > 0 {
+				metric.MemPercent = float64(memUsage) / float64(cap.memory) * 100
+			}
+		}
+
+		metrics[nodeMetric.Name] = metric
+	}
+
+	return metrics, nil
+}

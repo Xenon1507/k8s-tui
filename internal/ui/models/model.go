@@ -21,6 +21,7 @@ const (
 	ViewPods ViewMode = iota
 	ViewDeployments
 	ViewServices
+	ViewNodes
 	ViewConfigMaps
 	ViewSecrets
 	ViewIngresses
@@ -59,11 +60,14 @@ type Model struct {
 	Pods               []corev1.Pod
 	Deployments        []appsv1.Deployment
 	Services           []corev1.Service
+	Nodes              []corev1.Node
+	NodeMetrics        map[string]*k8s.NodeMetrics
 	Namespaces         []corev1.Namespace
 	Contexts           []string
 	SelectedPod        *corev1.Pod
 	SelectedDeployment *appsv1.Deployment
 	SelectedService    *corev1.Service
+	SelectedNode       *corev1.Node
 	PodEvents          []corev1.Event
 	Logs               []string
 
@@ -135,6 +139,13 @@ type ServicesLoadedMsg struct {
 	PreserveCursor   bool
 	SavedCursor      int
 	SavedViewOffset  int
+}
+
+// NodesLoadedMsg is sent when nodes are loaded
+type NodesLoadedMsg struct {
+	Nodes    []corev1.Node
+	Metrics  map[string]*k8s.NodeMetrics
+	Err      error
 }
 
 // ErrorMsg represents an error message
@@ -316,6 +327,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case NodesLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading nodes: %v", msg.Err)
+			return m, nil
+		}
+		m.Nodes = msg.Nodes
+		m.NodeMetrics = msg.Metrics
+		m.ErrorMessage = ""
+		if m.Cursor >= len(m.Nodes) {
+			m.Cursor = 0
+		}
+		return m, nil
+
 	case ErrorMsg:
 		m.ErrorMessage = msg.Err.Error()
 		return m, nil
@@ -393,6 +418,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadServices()
+		case "4":
+			m.CurrentView = ViewNodes
+			m.Cursor = 0
+			m.ListViewOffset = 0
+			m.Loading = true
+			return m, m.loadNodes()
 		case "n":
 			m.CurrentView = ViewNamespaces
 			m.Cursor = 0
@@ -573,6 +604,12 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.CurrentView == ViewNodes && len(m.Nodes) > 0 {
+		m.SelectedNode = &m.Nodes[m.Cursor]
+		m.CurrentPanel = PanelDetail
+		return m, nil
+	}
+
 	if m.CurrentView == ViewNamespaces && len(m.Namespaces) > 0 {
 		m.CurrentNamespace = m.Namespaces[m.Cursor].Name
 		m.CurrentView = ViewPods
@@ -732,6 +769,30 @@ func (m Model) loadServicesPreservingPosition(cursor int, offset int) tea.Cmd {
 			PreserveCursor:  true,
 			SavedCursor:     cursor,
 			SavedViewOffset: offset,
+		}
+	}
+}
+
+// loadNodes loads nodes and their metrics from the cluster
+func (m Model) loadNodes() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		nodes, err := m.client.GetNodes(ctx)
+		if err != nil {
+			return NodesLoadedMsg{Nodes: nil, Metrics: nil, Err: err}
+		}
+
+		// Try to get metrics (may fail if metrics server is not installed)
+		metrics, metricsErr := m.client.GetNodeMetrics(ctx)
+		if metricsErr != nil {
+			// Don't fail if metrics are unavailable, just log it
+			metrics = make(map[string]*k8s.NodeMetrics)
+		}
+
+		return NodesLoadedMsg{
+			Nodes:   nodes,
+			Metrics: metrics,
+			Err:     nil,
 		}
 	}
 }

@@ -31,6 +31,8 @@ func View(m models.Model) string {
 		content = renderDeploymentsView(m)
 	case models.ViewServices:
 		content = renderServicesView(m)
+	case models.ViewNodes:
+		content = renderNodesView(m)
 	case models.ViewNamespaces:
 		content = renderNamespacesView(m)
 	case models.ViewContexts:
@@ -87,6 +89,7 @@ func renderTabs(m models.Model) string {
 		renderTab("1", "Pods", m.CurrentView == models.ViewPods),
 		renderTab("2", "Deployments", m.CurrentView == models.ViewDeployments),
 		renderTab("3", "Services", m.CurrentView == models.ViewServices),
+		renderTab("4", "Nodes", m.CurrentView == models.ViewNodes),
 		renderTab("n", "Namespaces", m.CurrentView == models.ViewNamespaces),
 		renderTab("c", "Contexts", m.CurrentView == models.ViewContexts),
 	}
@@ -954,4 +957,245 @@ func getSortedMapKeys(m map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// renderNodesView renders the nodes view with detail panel
+func renderNodesView(m models.Model) string {
+	if m.Loading {
+		return styles.PanelStyle.Render("Loading nodes...")
+	}
+
+	if m.ErrorMessage != "" {
+		return styles.ErrorStyle.Render(m.ErrorMessage)
+	}
+
+	if len(m.Nodes) == 0 {
+		return styles.PanelStyle.Render("No nodes found")
+	}
+
+	// Split view: List on left, details on right
+	listView := renderNodesList(m)
+
+	var detailView string
+	switch m.CurrentPanel {
+	case models.PanelDetail:
+		detailView = renderNodeDetail(m)
+	default:
+		detailView = styles.PanelStyle.Render("Select a node and press Enter for details")
+	}
+
+	// Calculate available height
+	availableHeight := m.Height - 10
+	if availableHeight < 20 {
+		availableHeight = 20
+	}
+
+	listWidth := m.Width / 2
+	detailWidth := m.Width - listWidth - 4
+
+	listView = lipgloss.NewStyle().
+		Width(listWidth).
+		Height(availableHeight).
+		Render(listView)
+
+	detailView = lipgloss.NewStyle().
+		Width(detailWidth).
+		Height(availableHeight).
+		Render(detailView)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detailView)
+}
+
+// renderNodesList renders the nodes list
+func renderNodesList(m models.Model) string {
+	var rows []string
+
+	// Table header
+	header := fmt.Sprintf("%-3s %-30s %-12s %-8s",
+		"", "NAME", "STATUS", "AGE")
+	rows = append(rows, styles.TableHeaderStyle.Render(header))
+
+	// Table rows
+	for i, node := range m.Nodes {
+		// Calculate age
+		age := formatDuration(time.Since(node.CreationTimestamp.Time))
+
+		// Truncate name if needed
+		name := node.Name
+		if len(name) > 28 {
+			name = name[:25] + "..."
+		}
+
+		// Determine status
+		status := "NotReady"
+		icon := "○"
+		for _, condition := range node.Status.Conditions {
+			if condition.Type == "Ready" {
+				if condition.Status == "True" {
+					status = "Ready"
+					icon = "●"
+				}
+				break
+			}
+		}
+
+		row := fmt.Sprintf("%-3s %-30s %-12s %-8s",
+			icon,
+			name,
+			status,
+			age,
+		)
+
+		if i == m.Cursor {
+			rows = append(rows, styles.TableSelectedStyle.Render(row))
+		} else {
+			rows = append(rows, styles.TableRowStyle.Render(row))
+		}
+	}
+
+	// Add count footer
+	countFooter := fmt.Sprintf("\n%d nodes total", len(m.Nodes))
+	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderNodeDetail renders node details with resource usage bars
+func renderNodeDetail(m models.Model) string {
+	if m.SelectedNode == nil {
+		return styles.PanelStyle.Render("No node selected")
+	}
+
+	node := m.SelectedNode
+
+	var details []string
+	details = append(details, styles.SubHeaderStyle.Render(fmt.Sprintf("Node: %s", node.Name)))
+	details = append(details, "")
+
+	// Status
+	status := "NotReady"
+	for _, condition := range node.Status.Conditions {
+		if condition.Type == "Ready" {
+			if condition.Status == "True" {
+				status = "Ready"
+			}
+			break
+		}
+	}
+	details = append(details, fmt.Sprintf("Status: %s", status))
+	details = append(details, fmt.Sprintf("Age: %s", formatDuration(time.Since(node.CreationTimestamp.Time))))
+	details = append(details, "")
+
+	// Addresses
+	if len(node.Status.Addresses) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Addresses:"))
+		for _, addr := range node.Status.Addresses {
+			details = append(details, fmt.Sprintf("  %s: %s", addr.Type, addr.Address))
+		}
+		details = append(details, "")
+	}
+
+	// Resource Capacity & Usage with Progress Bars
+	cpuCap := node.Status.Allocatable.Cpu().MilliValue()
+	memCap := node.Status.Allocatable.Memory().Value()
+
+	details = append(details, styles.SubHeaderStyle.Render("Resources:"))
+
+	// CPU
+	cpuCapStr := fmt.Sprintf("%.2f cores", float64(cpuCap)/1000.0)
+	details = append(details, fmt.Sprintf("  CPU Capacity: %s", cpuCapStr))
+
+	if metrics, ok := m.NodeMetrics[node.Name]; ok && metrics != nil {
+		cpuUsageStr := fmt.Sprintf("%.2f cores", float64(metrics.CPUUsage)/1000.0)
+		details = append(details, fmt.Sprintf("  CPU Usage: %s (%.1f%%)", cpuUsageStr, metrics.CPUPercent))
+		details = append(details, fmt.Sprintf("  %s", renderProgressBar(metrics.CPUPercent, 40)))
+	} else {
+		details = append(details, "  CPU Usage: metrics unavailable")
+	}
+	details = append(details, "")
+
+	// Memory
+	memCapStr := formatBytes(memCap)
+	details = append(details, fmt.Sprintf("  Memory Capacity: %s", memCapStr))
+
+	if metrics, ok := m.NodeMetrics[node.Name]; ok && metrics != nil {
+		memUsageStr := formatBytes(metrics.MemoryUsage)
+		details = append(details, fmt.Sprintf("  Memory Usage: %s (%.1f%%)", memUsageStr, metrics.MemPercent))
+		details = append(details, fmt.Sprintf("  %s", renderProgressBar(metrics.MemPercent, 40)))
+	} else {
+		details = append(details, "  Memory Usage: metrics unavailable")
+	}
+	details = append(details, "")
+
+	// Node Info
+	details = append(details, styles.SubHeaderStyle.Render("System Info:"))
+	details = append(details, fmt.Sprintf("  OS: %s", node.Status.NodeInfo.OSImage))
+	details = append(details, fmt.Sprintf("  Kernel: %s", node.Status.NodeInfo.KernelVersion))
+	details = append(details, fmt.Sprintf("  Container Runtime: %s", node.Status.NodeInfo.ContainerRuntimeVersion))
+	details = append(details, fmt.Sprintf("  Kubelet: %s", node.Status.NodeInfo.KubeletVersion))
+	details = append(details, "")
+
+	// Conditions
+	if len(node.Status.Conditions) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Conditions:"))
+		for _, cond := range node.Status.Conditions {
+			status := "✓"
+			if cond.Status != "True" && cond.Status != "False" {
+				status = "?"
+			} else if (cond.Type == "Ready" && cond.Status != "True") ||
+				(cond.Type != "Ready" && cond.Status == "True") {
+				status = "✗"
+			}
+			details = append(details, fmt.Sprintf("  %s %s: %s", status, cond.Type, cond.Status))
+		}
+	}
+
+	return styles.ActivePanelStyle.Render(strings.Join(details, "\n"))
+}
+
+// renderProgressBar creates a beautiful progress bar using LipGloss
+func renderProgressBar(percent float64, width int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	filled := int(float64(width) * percent / 100.0)
+	empty := width - filled
+
+	// Choose color based on percentage
+	var barColor lipgloss.Color
+	if percent < 50 {
+		barColor = lipgloss.Color("#00ff00") // Green
+	} else if percent < 75 {
+		barColor = lipgloss.Color("#ffff00") // Yellow
+	} else if percent < 90 {
+		barColor = lipgloss.Color("#ff8800") // Orange
+	} else {
+		barColor = lipgloss.Color("#ff0000") // Red
+	}
+
+	filledStyle := lipgloss.NewStyle().Foreground(barColor)
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#333333"))
+
+	bar := filledStyle.Render(strings.Repeat("█", filled)) +
+		emptyStyle.Render(strings.Repeat("░", empty))
+
+	return fmt.Sprintf("[%s] %.1f%%", bar, percent)
+}
+
+// formatBytes formats bytes in a human-readable way
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
