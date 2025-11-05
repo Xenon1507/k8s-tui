@@ -464,6 +464,77 @@ func (m Model) getFilteredCount() int {
 	return count
 }
 
+// mapFilteredIndexToReal maps a filtered list index to the real list index
+func (m Model) mapFilteredIndexToReal(filteredIdx int) int {
+	if m.SearchQuery == "" {
+		return filteredIdx
+	}
+
+	currentFilteredIdx := 0
+	switch m.CurrentView {
+	case ViewPods:
+		for i, pod := range m.Pods {
+			if matchesSearch(pod.Name, m.SearchQuery) ||
+				matchesSearch(string(pod.Status.Phase), m.SearchQuery) ||
+				matchesSearch(pod.Namespace, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	case ViewDeployments:
+		for i, dep := range m.Deployments {
+			if matchesSearch(dep.Name, m.SearchQuery) ||
+				matchesSearch(dep.Namespace, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	case ViewServices:
+		for i, svc := range m.Services {
+			if matchesSearch(svc.Name, m.SearchQuery) ||
+				matchesSearch(string(svc.Spec.Type), m.SearchQuery) ||
+				matchesSearch(svc.Namespace, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	case ViewNodes:
+		for i, node := range m.Nodes {
+			if matchesSearch(node.Name, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	case ViewNamespaces:
+		for i, ns := range m.Namespaces {
+			if matchesSearch(ns.Name, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	case ViewContexts:
+		for i, ctx := range m.Contexts {
+			if matchesSearch(ctx, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	}
+	return filteredIdx
+}
+
 // handleKeyPress handles keyboard input
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Clear messages on any key press
@@ -528,9 +599,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			// Enter exits search mode
+			// Map filtered index to real index before exiting search
+			m.Cursor = m.mapFilteredIndexToReal(m.Cursor)
+			// Exit search mode and execute the normal enter action
 			m.SearchActive = false
-			return m, nil
+			m.SearchQuery = ""
+			return m.handleEnter()
 		case "up", "k":
 			// Allow navigation during search on filtered results
 			if m.Cursor > 0 {
