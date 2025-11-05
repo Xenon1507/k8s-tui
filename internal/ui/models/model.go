@@ -487,6 +487,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				maxCursor = len(m.Deployments) - 1
 			case ViewServices:
 				maxCursor = len(m.Services) - 1
+			case ViewNodes:
+				maxCursor = len(m.Nodes) - 1
 			case ViewNamespaces:
 				maxCursor = len(m.Namespaces) - 1
 			case ViewContexts:
