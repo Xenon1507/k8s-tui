@@ -1488,7 +1488,7 @@ func renderHelmReleasesList(m models.Model) string {
 		}
 
 		// Format updated time
-		updated := formatRelativeTime(release.Updated)
+		updated := formatRelativeTime(release.Updated.Time)
 
 		row := fmt.Sprintf("%-25s %-15s %-10s %-20s %-12s %-10s",
 			truncate(release.Name, 25),

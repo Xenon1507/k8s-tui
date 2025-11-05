@@ -9,26 +9,58 @@ import (
 	"time"
 )
 
+// HelmTime is a custom time type that can parse Helm's time format
+type HelmTime struct {
+	time.Time
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for Helm's time format
+func (ht *HelmTime) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "null" || s == "" {
+		ht.Time = time.Time{}
+		return nil
+	}
+
+	// Try multiple time formats that Helm might use
+	formats := []string{
+		"2006-01-02 15:04:05.999999999 -0700 MST", // Helm's default format
+		time.RFC3339,                               // Standard RFC3339
+		time.RFC3339Nano,                           // RFC3339 with nanoseconds
+		"2006-01-02T15:04:05.999999999Z07:00",     // Alternative format
+	}
+
+	var err error
+	for _, format := range formats {
+		ht.Time, err = time.Parse(format, s)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unable to parse time %q with any known format: %w", s, err)
+}
+
 // Release represents a Helm release
 type Release struct {
-	Name         string    `json:"name"`
-	Namespace    string    `json:"namespace"`
-	Revision     string    `json:"revision"`
-	Updated      time.Time `json:"updated"`
-	Status       string    `json:"status"`
-	Chart        string    `json:"chart"`
-	AppVersion   string    `json:"app_version"`
-	Description  string    `json:"description"`
+	Name         string   `json:"name"`
+	Namespace    string   `json:"namespace"`
+	Revision     string   `json:"revision"`
+	Updated      HelmTime `json:"updated"`
+	Status       string   `json:"status"`
+	Chart        string   `json:"chart"`
+	AppVersion   string   `json:"app_version"`
+	Description  string   `json:"description"`
 }
 
 // ReleaseHistory represents a single revision in release history
 type ReleaseHistory struct {
-	Revision    int       `json:"revision"`
-	Updated     time.Time `json:"updated"`
-	Status      string    `json:"status"`
-	Chart       string    `json:"chart"`
-	AppVersion  string    `json:"app_version"`
-	Description string    `json:"description"`
+	Revision    int      `json:"revision"`
+	Updated     HelmTime `json:"updated"`
+	Status      string   `json:"status"`
+	Chart       string   `json:"chart"`
+	AppVersion  string   `json:"app_version"`
+	Description string   `json:"description"`
 }
 
 // Client wraps Helm CLI operations
@@ -84,9 +116,9 @@ func (c *Client) GetReleaseStatus(name, namespace string) (*Release, error) {
 	var result struct {
 		Name      string `json:"name"`
 		Info      struct {
-			Status      string    `json:"status"`
-			LastDeployed time.Time `json:"last_deployed"`
-			Description string    `json:"description"`
+			Status      string   `json:"status"`
+			LastDeployed HelmTime `json:"last_deployed"`
+			Description string   `json:"description"`
 		} `json:"info"`
 		Chart struct {
 			Metadata struct {
