@@ -43,6 +43,7 @@ const (
 	PanelList PanelMode = iota
 	PanelDetail
 	PanelLogs
+	PanelYAML
 	PanelHelp
 	PanelHelmHistory
 	PanelHelmManifest
@@ -80,6 +81,10 @@ type Model struct {
 	SelectedNode       *corev1.Node
 	PodEvents          []corev1.Event
 	Logs               []string
+	LogAutoScroll      bool   // Auto-scroll logs to bottom
+	LogFollow          bool   // Follow mode for logs
+	YAMLContent        string // YAML content for current resource
+	YAMLViewOffset     int    // Scroll offset for YAML viewer
 
 	// Helm data
 	HelmReleases        []helm.Release
@@ -193,6 +198,12 @@ type HelmManifestLoadedMsg struct {
 	Err      error
 }
 
+// YAMLLoadedMsg represents loaded YAML content
+type YAMLLoadedMsg struct {
+	YAML string
+	Err  error
+}
+
 // ErrorMsg represents an error message
 type ErrorMsg struct {
 	Err error
@@ -202,6 +213,9 @@ type ErrorMsg struct {
 type SuccessMsg struct {
 	Message string
 }
+
+// refreshLogsMsg triggers a log refresh in follow mode
+type refreshLogsMsg struct{}
 
 // NewModel creates a new model
 func NewModel(client *k8s.Client, cfg *config.Config) Model {
@@ -231,6 +245,8 @@ func NewModel(client *k8s.Client, cfg *config.Config) Model {
 		Namespaces:       []corev1.Namespace{},
 		HelmReleases:     []helm.Release{},
 		Cursor:           0,
+		LogAutoScroll:    true,  // Auto-scroll enabled by default
+		LogFollow:        false, // Follow mode off by default
 		autoRefresh:      true,
 		lastRefresh:      time.Now(),
 	}
@@ -328,7 +344,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.Logs = msg.Logs
 		m.ErrorMessage = ""
-		return m, nil
+
+		// Auto-scroll to bottom when logs are loaded
+		if m.LogAutoScroll || m.LogFollow {
+			// Calculate available height for logs (doubled as per user request)
+			availableHeight := (m.Height - 8) * 2
+			if availableHeight < 20 {
+				availableHeight = 20
+			}
+
+			// Scroll to bottom
+			if len(m.Logs) > availableHeight {
+				m.LogViewOffset = len(m.Logs) - availableHeight
+			} else {
+				m.LogViewOffset = 0
+			}
+		}
+
+		// If follow mode is enabled, schedule next refresh
+		var followCmd tea.Cmd
+		if m.LogFollow {
+			followCmd = tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+				return refreshLogsMsg{}
+			})
+		}
+
+		return m, followCmd
 
 	case DeploymentsLoadedMsg:
 		m.Loading = false
@@ -439,6 +480,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ErrorMessage = ""
 		return m, nil
 
+	case YAMLLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading YAML: %v", msg.Err)
+			return m, nil
+		}
+		m.YAMLContent = msg.YAML
+		m.ErrorMessage = ""
+		return m, nil
+
 	case ErrorMsg:
 		m.ErrorMessage = msg.Err.Error()
 		return m, nil
@@ -449,6 +500,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 			return SuccessMsg{Message: ""}
 		})
+
+	case refreshLogsMsg:
+		// Only refresh logs if we're still in log panel and follow mode is active
+		if m.CurrentPanel == PanelLogs && m.LogFollow {
+			return m, m.loadLogs()
+		}
+		return m, nil
+
+	case scaleCompletedMsg:
+		// Show success message and refresh deployments
+		m.SuccessMessage = msg.Message
+		// Update the selected deployment's replica count immediately
+		if m.SelectedDeployment != nil {
+			m.SelectedDeployment.Spec.Replicas = &msg.NewScale
+		}
+		// Trigger deployment refresh to get latest status
+		return m, tea.Batch(
+			m.loadDeploymentsPreservingPosition(m.Cursor, m.ListViewOffset),
+			tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+				return SuccessMsg{Message: ""}
+			}),
+		)
 
 	case RefreshDataMsg:
 		m.lastRefresh = time.Now()
@@ -838,6 +911,13 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// If in YAML view, scroll up
+			if m.CurrentPanel == PanelYAML {
+				if m.YAMLViewOffset > 0 {
+					m.YAMLViewOffset--
+				}
+				return m, nil
+			}
 			// Otherwise move cursor
 			if m.Cursor > 0 {
 				m.Cursor--
@@ -1015,6 +1095,52 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.Loading = true
 				m.ManifestViewOffset = 0
 				return m, m.loadHelmManifest()
+			}
+		case "y":
+			// Show YAML for selected resource
+			if m.CurrentPanel == PanelDetail {
+				m.CurrentPanel = PanelYAML
+				m.Loading = true
+				m.YAMLViewOffset = 0
+				return m, m.loadYAML()
+			}
+		case "a":
+			// Toggle auto-scroll when in log panel
+			if m.CurrentPanel == PanelLogs {
+				m.LogAutoScroll = !m.LogAutoScroll
+				// If enabling auto-scroll, scroll to bottom immediately
+				if m.LogAutoScroll {
+					availableHeight := (m.Height - 8) * 2
+					if availableHeight < 20 {
+						availableHeight = 20
+					}
+					if len(m.Logs) > availableHeight {
+						m.LogViewOffset = len(m.Logs) - availableHeight
+					}
+				}
+				return m, nil
+			}
+		case "f":
+			// Toggle follow mode when in log panel
+			if m.CurrentPanel == PanelLogs {
+				m.LogFollow = !m.LogFollow
+				// If enabling follow mode, also enable auto-scroll
+				if m.LogFollow {
+					m.LogAutoScroll = true
+					// Start following immediately
+					return m, m.loadLogs()
+				}
+				return m, nil
+			}
+		case "+", "=":
+			// Scale up deployment
+			if m.CurrentView == ViewDeployments && m.CurrentPanel == PanelDetail && m.SelectedDeployment != nil {
+				return m, m.scaleDeployment(1)
+			}
+		case "-", "_":
+			// Scale down deployment
+			if m.CurrentView == ViewDeployments && m.CurrentPanel == PanelDetail && m.SelectedDeployment != nil {
+				return m, m.scaleDeployment(-1)
 			}
 		}
 	}
@@ -1448,6 +1574,44 @@ func (m Model) deletePod() tea.Msg {
 	return SuccessMsg{Message: fmt.Sprintf("Pod %s deleted", pod.Name)}
 }
 
+// scaleDeployment scales the selected deployment and refreshes the deployment list
+func (m Model) scaleDeployment(delta int32) tea.Cmd {
+	return func() tea.Msg {
+		if m.SelectedDeployment == nil {
+			return ErrorMsg{Err: fmt.Errorf("no deployment selected")}
+		}
+
+		deployment := m.SelectedDeployment
+		currentReplicas := int32(0)
+		if deployment.Spec.Replicas != nil {
+			currentReplicas = *deployment.Spec.Replicas
+		}
+
+		newReplicas := currentReplicas + delta
+		if newReplicas < 0 {
+			newReplicas = 0
+		}
+
+		ctx := context.Background()
+		err := m.client.ScaleDeployment(ctx, deployment.Namespace, deployment.Name, newReplicas)
+		if err != nil {
+			return ErrorMsg{Err: fmt.Errorf("failed to scale deployment: %w", err)}
+		}
+
+		// Return a special message that will trigger a deployment refresh
+		return scaleCompletedMsg{
+			Message:  fmt.Sprintf("Deployment %s scaled to %d replicas", deployment.Name, newReplicas),
+			NewScale: newReplicas,
+		}
+	}
+}
+
+// scaleCompletedMsg is sent when a deployment is successfully scaled
+type scaleCompletedMsg struct {
+	Message  string
+	NewScale int32
+}
+
 // loadHelmReleases loads all Helm releases
 func (m Model) loadHelmReleases() tea.Cmd {
 	return func() tea.Msg {
@@ -1507,6 +1671,41 @@ func (m Model) loadHelmManifest() tea.Cmd {
 		return HelmManifestLoadedMsg{
 			Manifest: manifest,
 			Err:      err,
+		}
+	}
+}
+
+// loadYAML loads YAML for the current selected resource
+func (m Model) loadYAML() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		var yaml string
+		var err error
+
+		switch m.CurrentView {
+		case ViewPods:
+			if m.SelectedPod != nil {
+				yaml, err = m.client.GetResourceYAML(ctx, "pod", m.SelectedPod.Name, m.SelectedPod.Namespace)
+			}
+		case ViewDeployments:
+			if m.SelectedDeployment != nil {
+				yaml, err = m.client.GetResourceYAML(ctx, "deployment", m.SelectedDeployment.Name, m.SelectedDeployment.Namespace)
+			}
+		case ViewServices:
+			if m.SelectedService != nil {
+				yaml, err = m.client.GetResourceYAML(ctx, "service", m.SelectedService.Name, m.SelectedService.Namespace)
+			}
+		case ViewNodes:
+			if m.SelectedNode != nil {
+				yaml, err = m.client.GetResourceYAML(ctx, "node", m.SelectedNode.Name, "")
+			}
+		default:
+			err = fmt.Errorf("YAML view not supported for this resource type")
+		}
+
+		return YAMLLoadedMsg{
+			YAML: yaml,
+			Err:  err,
 		}
 	}
 }

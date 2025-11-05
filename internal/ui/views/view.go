@@ -121,6 +121,11 @@ func renderPodsView(m models.Model) string {
 		return renderPodLogsFullScreen(m)
 	}
 
+	// If viewing YAML, show full-screen YAML view
+	if m.CurrentPanel == models.PanelYAML {
+		return renderYAMLView(m)
+	}
+
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading pods...")
 	}
@@ -332,6 +337,100 @@ func renderPodLogs(m models.Model) string {
 	return renderPodLogsFullScreen(m)
 }
 
+// renderYAMLView renders YAML content in full-screen mode with scrolling
+func renderYAMLView(m models.Model) string {
+	// Determine what resource we're viewing
+	resourceName := ""
+	resourceType := ""
+
+	switch m.CurrentView {
+	case models.ViewPods:
+		if m.SelectedPod != nil {
+			resourceName = m.SelectedPod.Name
+			resourceType = "Pod"
+		}
+	case models.ViewDeployments:
+		if m.SelectedDeployment != nil {
+			resourceName = m.SelectedDeployment.Name
+			resourceType = "Deployment"
+		}
+	case models.ViewServices:
+		if m.SelectedService != nil {
+			resourceName = m.SelectedService.Name
+			resourceType = "Service"
+		}
+	case models.ViewNodes:
+		if m.SelectedNode != nil {
+			resourceName = m.SelectedNode.Name
+			resourceType = "Node"
+		}
+	}
+
+	header := styles.LogHeaderStyle.Render(fmt.Sprintf("📄 YAML: %s (%s)", resourceName, resourceType))
+
+	var content string
+
+	if m.Loading {
+		content = "\n\nLoading YAML...\n\nPlease wait..."
+	} else if m.ErrorMessage != "" {
+		content = "\n\n" + styles.ErrorStyle.Render(m.ErrorMessage)
+	} else if m.YAMLContent != "" {
+		// Calculate visible area
+		availableHeight := m.Height - 8 // Account for header, footer, borders
+		if availableHeight < 10 {
+			availableHeight = 10
+		}
+
+		// Split YAML into lines
+		yamlLines := strings.Split(m.YAMLContent, "\n")
+
+		// Get the visible slice of YAML
+		startLine := m.YAMLViewOffset
+		endLine := startLine + availableHeight
+
+		if startLine >= len(yamlLines) {
+			startLine = len(yamlLines) - availableHeight
+			if startLine < 0 {
+				startLine = 0
+			}
+		}
+
+		if endLine > len(yamlLines) {
+			endLine = len(yamlLines)
+		}
+
+		visibleLines := yamlLines[startLine:endLine]
+		content = "\n" + strings.Join(visibleLines, "\n")
+
+		// Add scroll indicators
+		scrollInfo := ""
+		if len(yamlLines) > availableHeight {
+			scrollPercent := int(float64(startLine) / float64(len(yamlLines)-availableHeight) * 100)
+			if scrollPercent < 0 {
+				scrollPercent = 0
+			}
+			if scrollPercent > 100 {
+				scrollPercent = 100
+			}
+			scrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
+		}
+
+		footer := fmt.Sprintf("\n[Lines %d-%d of %d%s] ↑↓/j/k: Scroll | Esc: Close",
+			startLine+1, endLine, len(yamlLines), scrollInfo)
+		content += styles.HelpDescStyle.Render(footer)
+	} else {
+		content = "\n\nNo YAML available for this resource."
+	}
+
+	// Render in full width
+	fullContent := header + content
+
+	return styles.LogStyle.
+		Width(m.Width - 4).
+		Height(m.Height - 6).
+		Render(fullContent)
+}
+
 // renderPodLogsFullScreen renders pod logs in full-screen mode with scrolling
 func renderPodLogsFullScreen(m models.Model) string {
 	if m.SelectedPod == nil {
@@ -346,7 +445,18 @@ func renderPodLogsFullScreen(m models.Model) string {
 		containerInfo = fmt.Sprintf(" (container: %s)", pod.Spec.Containers[0].Name)
 	}
 
-	header := styles.LogHeaderStyle.Render(fmt.Sprintf("📋 Logs: %s%s", pod.Name, containerInfo))
+	// Add status indicators for auto-scroll and follow mode
+	statusIndicators := ""
+	if m.LogFollow {
+		followStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
+		statusIndicators += " " + followStyle.Render("[FOLLOW]")
+	}
+	if m.LogAutoScroll {
+		autoScrollStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00CED1"))
+		statusIndicators += " " + autoScrollStyle.Render("[AUTO-SCROLL]")
+	}
+
+	header := styles.LogHeaderStyle.Render(fmt.Sprintf("📋 Logs: %s%s%s", pod.Name, containerInfo, statusIndicators))
 
 	var content string
 
@@ -355,10 +465,10 @@ func renderPodLogsFullScreen(m models.Model) string {
 	} else if m.ErrorMessage != "" {
 		content = "\n\n" + styles.ErrorStyle.Render(m.ErrorMessage)
 	} else if len(m.Logs) > 0 {
-		// Calculate visible area
-		availableHeight := m.Height - 8 // Account for header, footer, borders
-		if availableHeight < 10 {
-			availableHeight = 10
+		// Calculate visible area (doubled as per user request)
+		availableHeight := (m.Height - 8) * 2
+		if availableHeight < 20 {
+			availableHeight = 20
 		}
 
 		// Get the visible slice of logs
@@ -392,7 +502,7 @@ func renderPodLogsFullScreen(m models.Model) string {
 			scrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
 		}
 
-		footer := fmt.Sprintf("\n[Lines %d-%d of %d%s] ↑↓/j/k: Scroll | Esc: Close",
+		footer := fmt.Sprintf("\n[Lines %d-%d of %d%s] ↑↓/j/k: Scroll | a: Auto-scroll | f: Follow | Esc: Close",
 			startLine+1, endLine, len(m.Logs), scrollInfo)
 		content += styles.HelpDescStyle.Render(footer)
 	} else {
@@ -642,6 +752,11 @@ func renderDeploymentsView(m models.Model) string {
 		return renderPodLogsFullScreen(m) // Reuse the same log viewer
 	}
 
+	// If viewing YAML, show full-screen YAML view
+	if m.CurrentPanel == models.PanelYAML {
+		return renderYAMLView(m)
+	}
+
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading deployments...")
 	}
@@ -854,11 +969,21 @@ func renderDeploymentDetail(m models.Model) string {
 		}
 	}
 
+	// Add scale hint
+	details = append(details, "")
+	scaleHint := styles.HelpDescStyle.Render("Press +/- to scale replicas | y: YAML | Esc: Back")
+	details = append(details, scaleHint)
+
 	return styles.ActivePanelStyle.Render(strings.Join(details, "\n"))
 }
 
 // renderServicesView renders the services view with detail panel
 func renderServicesView(m models.Model) string {
+	// If viewing YAML, show full-screen YAML view
+	if m.CurrentPanel == models.PanelYAML {
+		return renderYAMLView(m)
+	}
+
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading services...")
 	}
@@ -1111,6 +1236,11 @@ func getSortedMapKeys(m map[string]string) []string {
 
 // renderNodesView renders the nodes view with detail panel
 func renderNodesView(m models.Model) string {
+	// If viewing YAML, show full-screen YAML view
+	if m.CurrentPanel == models.PanelYAML {
+		return renderYAMLView(m)
+	}
+
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading nodes...")
 	}

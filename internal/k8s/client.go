@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -325,4 +327,81 @@ func (c *Client) GetNodeMetrics(ctx context.Context) (map[string]*NodeMetrics, e
 	}
 
 	return metrics, nil
+}
+
+// GetResourceYAML returns the YAML representation of a resource
+func (c *Client) GetResourceYAML(ctx context.Context, resourceType, name, namespace string) (string, error) {
+	// Use kubectl to get YAML as it provides consistent formatting
+	// and handles all resource types well
+	args := []string{"get", resourceType, name, "-o", "yaml"}
+
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+
+	// Add context if we have one
+	if c.rawConfig != nil && c.rawConfig.CurrentContext != "" {
+		args = append(args, "--context", c.rawConfig.CurrentContext)
+	}
+
+	cmd := exec.Command("kubectl", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to get YAML: %w, output: %s", err, string(output))
+	}
+
+	return string(output), nil
+}
+
+// ScaleDeployment scales a deployment to the specified number of replicas
+func (c *Client) ScaleDeployment(ctx context.Context, namespace, name string, replicas int32) error {
+	deployment, err := c.clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	deployment.Spec.Replicas = &replicas
+	_, err = c.clientset.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to scale deployment: %w", err)
+	}
+
+	return nil
+}
+
+// GetPVCs returns persistent volume claims in the specified namespace
+func (c *Client) GetPVCs(ctx context.Context, namespace string) ([]corev1.PersistentVolumeClaim, error) {
+	if namespace == "" {
+		namespace = corev1.NamespaceAll
+	}
+
+	list, err := c.clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// ResizePVC resizes a PersistentVolumeClaim to the new size
+func (c *Client) ResizePVC(ctx context.Context, namespace, name string, newSize string) error {
+	pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get PVC: %w", err)
+	}
+
+	// Parse the new size
+	quantity, err := resource.ParseQuantity(newSize)
+	if err != nil {
+		return fmt.Errorf("invalid size format: %w", err)
+	}
+
+	// Update the requested storage size
+	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = quantity
+
+	_, err = c.clientset.CoreV1().PersistentVolumeClaims(namespace).Update(ctx, pvc, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to resize PVC: %w", err)
+	}
+
+	return nil
 }
