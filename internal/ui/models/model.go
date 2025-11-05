@@ -361,6 +361,109 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// matchesSearch checks if a string contains the search query (case-insensitive)
+func matchesSearch(text, query string) bool {
+	if query == "" {
+		return true
+	}
+	return len(query) > 0 && len(text) > 0 &&
+		containsIgnoreCase(text, query)
+}
+
+// containsIgnoreCase checks if s contains substr (case-insensitive)
+func containsIgnoreCase(s, substr string) bool {
+	s = toLower(s)
+	substr = toLower(substr)
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// toLower converts a string to lowercase
+func toLower(s string) string {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c = c + ('a' - 'A')
+		}
+		result[i] = c
+	}
+	return string(result)
+}
+
+// getFilteredCount returns the count of filtered items for the current view
+func (m Model) getFilteredCount() int {
+	if m.SearchQuery == "" {
+		// No filtering, return full count
+		switch m.CurrentView {
+		case ViewPods:
+			return len(m.Pods)
+		case ViewDeployments:
+			return len(m.Deployments)
+		case ViewServices:
+			return len(m.Services)
+		case ViewNodes:
+			return len(m.Nodes)
+		case ViewNamespaces:
+			return len(m.Namespaces)
+		case ViewContexts:
+			return len(m.Contexts)
+		}
+		return 0
+	}
+
+	// Count filtered items
+	count := 0
+	switch m.CurrentView {
+	case ViewPods:
+		for _, pod := range m.Pods {
+			if matchesSearch(pod.Name, m.SearchQuery) ||
+				matchesSearch(string(pod.Status.Phase), m.SearchQuery) ||
+				matchesSearch(pod.Namespace, m.SearchQuery) {
+				count++
+			}
+		}
+	case ViewDeployments:
+		for _, dep := range m.Deployments {
+			if matchesSearch(dep.Name, m.SearchQuery) ||
+				matchesSearch(dep.Namespace, m.SearchQuery) {
+				count++
+			}
+		}
+	case ViewServices:
+		for _, svc := range m.Services {
+			if matchesSearch(svc.Name, m.SearchQuery) ||
+				matchesSearch(string(svc.Spec.Type), m.SearchQuery) ||
+				matchesSearch(svc.Namespace, m.SearchQuery) {
+				count++
+			}
+		}
+	case ViewNodes:
+		for _, node := range m.Nodes {
+			if matchesSearch(node.Name, m.SearchQuery) {
+				count++
+			}
+		}
+	case ViewNamespaces:
+		for _, ns := range m.Namespaces {
+			if matchesSearch(ns.Name, m.SearchQuery) {
+				count++
+			}
+		}
+	case ViewContexts:
+		for _, ctx := range m.Contexts {
+			if matchesSearch(ctx, m.SearchQuery) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 // handleKeyPress handles keyboard input
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Clear messages on any key press
@@ -436,17 +539,9 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "down", "j":
 			// Allow navigation during search on filtered results
-			maxCursor := 0
-			// Get max based on filtered results (we'll use original lists for now)
-			switch m.CurrentView {
-			case ViewPods:
-				maxCursor = len(m.Pods) - 1
-			case ViewDeployments:
-				maxCursor = len(m.Deployments) - 1
-			case ViewServices:
-				maxCursor = len(m.Services) - 1
-			case ViewNodes:
-				maxCursor = len(m.Nodes) - 1
+			maxCursor := m.getFilteredCount() - 1
+			if maxCursor < 0 {
+				maxCursor = 0
 			}
 			if m.Cursor < maxCursor {
 				m.Cursor++
