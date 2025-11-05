@@ -98,8 +98,11 @@ type RefreshDataMsg struct{}
 
 // PodsLoadedMsg is sent when pods are loaded
 type PodsLoadedMsg struct {
-	Pods []corev1.Pod
-	Err  error
+	Pods             []corev1.Pod
+	Err              error
+	PreserveCursor   bool
+	SavedCursor      int
+	SavedViewOffset  int
 }
 
 // NamespacesLoadedMsg is sent when namespaces are loaded
@@ -116,14 +119,20 @@ type LogsLoadedMsg struct {
 
 // DeploymentsLoadedMsg is sent when deployments are loaded
 type DeploymentsLoadedMsg struct {
-	Deployments []appsv1.Deployment
-	Err         error
+	Deployments      []appsv1.Deployment
+	Err              error
+	PreserveCursor   bool
+	SavedCursor      int
+	SavedViewOffset  int
 }
 
 // ServicesLoadedMsg is sent when services are loaded
 type ServicesLoadedMsg struct {
-	Services []corev1.Service
-	Err      error
+	Services         []corev1.Service
+	Err              error
+	PreserveCursor   bool
+	SavedCursor      int
+	SavedViewOffset  int
 }
 
 // ErrorMsg represents an error message
@@ -180,12 +189,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKeyPress(msg)
 
 	case TickMsg:
-		if m.autoRefresh && time.Since(m.lastRefresh) >= m.config.RefreshInterval {
+		// Only auto-refresh resource views (Pods, Deployments, Services), not selection views
+		shouldRefresh := m.autoRefresh &&
+			time.Since(m.lastRefresh) >= m.config.RefreshInterval &&
+			(m.CurrentView == ViewPods || m.CurrentView == ViewDeployments || m.CurrentView == ViewServices) &&
+			m.CurrentPanel == PanelList // Don't refresh while viewing details/logs
+
+		if shouldRefresh {
 			m.lastRefresh = time.Now()
-			return m, tea.Batch(
-				m.loadPods(),
-				m.tickCmd(),
-			)
+
+			// Save cursor position to restore after refresh
+			savedCursor := m.Cursor
+			savedOffset := m.ListViewOffset
+
+			var refreshCmd tea.Cmd
+			switch m.CurrentView {
+			case ViewPods:
+				refreshCmd = m.loadPodsPreservingPosition(savedCursor, savedOffset)
+			case ViewDeployments:
+				refreshCmd = m.loadDeploymentsPreservingPosition(savedCursor, savedOffset)
+			case ViewServices:
+				refreshCmd = m.loadServicesPreservingPosition(savedCursor, savedOffset)
+			}
+
+			return m, tea.Batch(refreshCmd, m.tickCmd())
 		}
 		return m, m.tickCmd()
 
@@ -197,9 +224,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.Pods = msg.Pods
 		m.ErrorMessage = ""
-		// Reset cursor if out of bounds
-		if m.Cursor >= len(m.Pods) {
-			m.Cursor = 0
+
+		// Restore cursor position if this was a refresh
+		if msg.PreserveCursor {
+			m.Cursor = msg.SavedCursor
+			m.ListViewOffset = msg.SavedViewOffset
+			// Ensure cursor is still valid
+			if m.Cursor >= len(m.Pods) {
+				m.Cursor = len(m.Pods) - 1
+				if m.Cursor < 0 {
+					m.Cursor = 0
+				}
+			}
+		} else {
+			// Reset cursor if out of bounds (for initial loads)
+			if m.Cursor >= len(m.Pods) {
+				m.Cursor = 0
+			}
 		}
 		return m, nil
 
@@ -229,8 +270,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.Deployments = msg.Deployments
 		m.ErrorMessage = ""
-		if m.Cursor >= len(m.Deployments) {
-			m.Cursor = 0
+
+		// Restore cursor position if this was a refresh
+		if msg.PreserveCursor {
+			m.Cursor = msg.SavedCursor
+			m.ListViewOffset = msg.SavedViewOffset
+			if m.Cursor >= len(m.Deployments) {
+				m.Cursor = len(m.Deployments) - 1
+				if m.Cursor < 0 {
+					m.Cursor = 0
+				}
+			}
+		} else {
+			if m.Cursor >= len(m.Deployments) {
+				m.Cursor = 0
+			}
 		}
 		return m, nil
 
@@ -242,8 +296,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.Services = msg.Services
 		m.ErrorMessage = ""
-		if m.Cursor >= len(m.Services) {
-			m.Cursor = 0
+
+		// Restore cursor position if this was a refresh
+		if msg.PreserveCursor {
+			m.Cursor = msg.SavedCursor
+			m.ListViewOffset = msg.SavedViewOffset
+			if m.Cursor >= len(m.Services) {
+				m.Cursor = len(m.Services) - 1
+				if m.Cursor < 0 {
+					m.Cursor = 0
+				}
+			}
+		} else {
+			if m.Cursor >= len(m.Services) {
+				m.Cursor = 0
+			}
 		}
 		return m, nil
 
@@ -539,7 +606,30 @@ func (m Model) loadPods() tea.Cmd {
 			namespace = ""
 		}
 		pods, err := m.client.GetPods(ctx, namespace)
-		return PodsLoadedMsg{Pods: pods, Err: err}
+		return PodsLoadedMsg{
+			Pods:           pods,
+			Err:            err,
+			PreserveCursor: false,
+		}
+	}
+}
+
+// loadPodsPreservingPosition loads pods while preserving cursor position
+func (m Model) loadPodsPreservingPosition(cursor int, offset int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		namespace := m.CurrentNamespace
+		if m.AllNamespaces {
+			namespace = ""
+		}
+		pods, err := m.client.GetPods(ctx, namespace)
+		return PodsLoadedMsg{
+			Pods:            pods,
+			Err:             err,
+			PreserveCursor:  true,
+			SavedCursor:     cursor,
+			SavedViewOffset: offset,
+		}
 	}
 }
 
@@ -561,7 +651,30 @@ func (m Model) loadDeployments() tea.Cmd {
 			namespace = ""
 		}
 		deployments, err := m.client.GetDeployments(ctx, namespace)
-		return DeploymentsLoadedMsg{Deployments: deployments, Err: err}
+		return DeploymentsLoadedMsg{
+			Deployments:    deployments,
+			Err:            err,
+			PreserveCursor: false,
+		}
+	}
+}
+
+// loadDeploymentsPreservingPosition loads deployments while preserving cursor position
+func (m Model) loadDeploymentsPreservingPosition(cursor int, offset int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		namespace := m.CurrentNamespace
+		if m.AllNamespaces {
+			namespace = ""
+		}
+		deployments, err := m.client.GetDeployments(ctx, namespace)
+		return DeploymentsLoadedMsg{
+			Deployments:     deployments,
+			Err:             err,
+			PreserveCursor:  true,
+			SavedCursor:     cursor,
+			SavedViewOffset: offset,
+		}
 	}
 }
 
@@ -574,7 +687,30 @@ func (m Model) loadServices() tea.Cmd {
 			namespace = ""
 		}
 		services, err := m.client.GetServices(ctx, namespace)
-		return ServicesLoadedMsg{Services: services, Err: err}
+		return ServicesLoadedMsg{
+			Services:       services,
+			Err:            err,
+			PreserveCursor: false,
+		}
+	}
+}
+
+// loadServicesPreservingPosition loads services while preserving cursor position
+func (m Model) loadServicesPreservingPosition(cursor int, offset int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		namespace := m.CurrentNamespace
+		if m.AllNamespaces {
+			namespace = ""
+		}
+		services, err := m.client.GetServices(ctx, namespace)
+		return ServicesLoadedMsg{
+			Services:        services,
+			Err:             err,
+			PreserveCursor:  true,
+			SavedCursor:     cursor,
+			SavedViewOffset: offset,
+		}
 	}
 }
 
