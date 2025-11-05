@@ -401,8 +401,26 @@ func renderPodLogsFullScreen(m models.Model) string {
 func renderNamespacesView(m models.Model) string {
 	var rows []string
 
-	rows = append(rows, styles.SubHeaderStyle.Render("Select a namespace:"))
-	rows = append(rows, "")
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	} else {
+		rows = append(rows, styles.SubHeaderStyle.Render("Select a namespace:"))
+		rows = append(rows, "")
+	}
+
+	// Filter namespaces if search is active
+	filteredNamespaces := m.Namespaces
+	if m.SearchQuery != "" {
+		filteredNamespaces = []corev1.Namespace{}
+		for _, ns := range m.Namespaces {
+			if matchesSearch(ns.Name, m.SearchQuery) {
+				filteredNamespaces = append(filteredNamespaces, ns)
+			}
+		}
+	}
 
 	// Calculate visible area
 	availableHeight := m.Height - 10 // Account for header, footer, margins
@@ -410,8 +428,11 @@ func renderNamespacesView(m models.Model) string {
 		availableHeight = 10
 	}
 
-	totalItems := len(m.Namespaces)
+	totalItems := len(filteredNamespaces)
 	if totalItems == 0 {
+		if m.SearchQuery != "" {
+			return styles.PanelStyle.Render("No namespaces match your search")
+		}
 		return styles.PanelStyle.Render("No namespaces found")
 	}
 
@@ -427,7 +448,7 @@ func renderNamespacesView(m models.Model) string {
 		startIdx = 0
 	}
 
-	visibleNamespaces := m.Namespaces[startIdx:endIdx]
+	visibleNamespaces := filteredNamespaces[startIdx:endIdx]
 
 	for i, ns := range visibleNamespaces {
 		actualIdx := startIdx + i
@@ -444,9 +465,14 @@ func renderNamespacesView(m models.Model) string {
 	}
 
 	// Add scroll indicator
+	totalStr := fmt.Sprintf("%d namespaces", len(m.Namespaces))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d namespaces (filtered)", len(filteredNamespaces), len(m.Namespaces))
+	}
+
 	if totalItems > availableHeight {
-		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %d] Use ↑↓ to scroll",
-			startIdx+1, endIdx, totalItems)
+		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %s] Use ↑↓ to scroll",
+			startIdx+1, endIdx, totalStr)
 		rows = append(rows, styles.HelpDescStyle.Render(scrollInfo))
 	}
 
@@ -457,8 +483,26 @@ func renderNamespacesView(m models.Model) string {
 func renderContextsView(m models.Model) string {
 	var rows []string
 
-	rows = append(rows, styles.SubHeaderStyle.Render("Select a context:"))
-	rows = append(rows, "")
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	} else {
+		rows = append(rows, styles.SubHeaderStyle.Render("Select a context:"))
+		rows = append(rows, "")
+	}
+
+	// Filter contexts if search is active
+	filteredContexts := m.Contexts
+	if m.SearchQuery != "" {
+		filteredContexts = []string{}
+		for _, ctx := range m.Contexts {
+			if matchesSearch(ctx, m.SearchQuery) {
+				filteredContexts = append(filteredContexts, ctx)
+			}
+		}
+	}
 
 	// Calculate visible area
 	availableHeight := m.Height - 10
@@ -466,8 +510,11 @@ func renderContextsView(m models.Model) string {
 		availableHeight = 10
 	}
 
-	totalItems := len(m.Contexts)
+	totalItems := len(filteredContexts)
 	if totalItems == 0 {
+		if m.SearchQuery != "" {
+			return styles.PanelStyle.Render("No contexts match your search")
+		}
 		return styles.PanelStyle.Render("No contexts found")
 	}
 
@@ -482,7 +529,7 @@ func renderContextsView(m models.Model) string {
 		startIdx = 0
 	}
 
-	visibleContexts := m.Contexts[startIdx:endIdx]
+	visibleContexts := filteredContexts[startIdx:endIdx]
 
 	for i, ctx := range visibleContexts {
 		actualIdx := startIdx + i
@@ -501,9 +548,14 @@ func renderContextsView(m models.Model) string {
 	}
 
 	// Add scroll indicator
+	totalStr := fmt.Sprintf("%d contexts", len(m.Contexts))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d contexts (filtered)", len(filteredContexts), len(m.Contexts))
+	}
+
 	if totalItems > availableHeight {
-		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %d] Use ↑↓ to scroll",
-			startIdx+1, endIdx, totalItems)
+		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %s] Use ↑↓ to scroll",
+			startIdx+1, endIdx, totalStr)
 		rows = append(rows, styles.HelpDescStyle.Render(scrollInfo))
 	}
 
