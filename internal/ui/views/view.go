@@ -26,6 +26,10 @@ func View(m models.Model) string {
 	switch m.CurrentView {
 	case models.ViewPods:
 		content = renderPodsView(m)
+	case models.ViewDeployments:
+		content = renderDeploymentsView(m)
+	case models.ViewServices:
+		content = renderServicesView(m)
 	case models.ViewNamespaces:
 		content = renderNamespacesView(m)
 	case models.ViewContexts:
@@ -398,6 +402,140 @@ func renderHelp(m models.Model) string {
 		lipgloss.Center,
 		styles.DialogBoxStyle.Width(60).Render(helpContent),
 	)
+}
+
+// renderDeploymentsView renders the deployments list view
+func renderDeploymentsView(m models.Model) string {
+	if m.Loading {
+		return styles.PanelStyle.Render("Loading deployments...")
+	}
+
+	if m.ErrorMessage != "" {
+		return styles.ErrorStyle.Render(m.ErrorMessage)
+	}
+
+	if len(m.Deployments) == 0 {
+		return styles.PanelStyle.Render("No deployments found")
+	}
+
+	var rows []string
+
+	// Table header
+	header := fmt.Sprintf("%-3s %-35s %-12s %-15s %-8s",
+		"", "NAME", "READY", "UP-TO-DATE", "AGE")
+	rows = append(rows, styles.TableHeaderStyle.Render(header))
+
+	// Table rows
+	for i, deploy := range m.Deployments {
+		// Calculate age
+		age := formatDuration(time.Since(deploy.CreationTimestamp.Time))
+
+		// Truncate name if needed
+		name := deploy.Name
+		if len(name) > 33 {
+			name = name[:30] + "..."
+		}
+
+		// Calculate ready status
+		ready := fmt.Sprintf("%d/%d", deploy.Status.ReadyReplicas, deploy.Status.Replicas)
+		upToDate := fmt.Sprintf("%d", deploy.Status.UpdatedReplicas)
+
+		// Status icon
+		icon := "●"
+		if deploy.Status.ReadyReplicas < deploy.Status.Replicas {
+			icon = "⚠"
+		}
+
+		row := fmt.Sprintf("%-3s %-35s %-12s %-15s %-8s",
+			icon,
+			name,
+			ready,
+			upToDate,
+			age,
+		)
+
+		if i == m.Cursor {
+			rows = append(rows, styles.TableSelectedStyle.Render(row))
+		} else {
+			rows = append(rows, styles.TableRowStyle.Render(row))
+		}
+	}
+
+	// Add count footer
+	countFooter := fmt.Sprintf("\n%d deployments total", len(m.Deployments))
+	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderServicesView renders the services list view
+func renderServicesView(m models.Model) string {
+	if m.Loading {
+		return styles.PanelStyle.Render("Loading services...")
+	}
+
+	if m.ErrorMessage != "" {
+		return styles.ErrorStyle.Render(m.ErrorMessage)
+	}
+
+	if len(m.Services) == 0 {
+		return styles.PanelStyle.Render("No services found")
+	}
+
+	var rows []string
+
+	// Table header
+	header := fmt.Sprintf("%-3s %-30s %-15s %-15s %-20s %-8s",
+		"", "NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "AGE")
+	rows = append(rows, styles.TableHeaderStyle.Render(header))
+
+	// Table rows
+	for i, svc := range m.Services {
+		// Calculate age
+		age := formatDuration(time.Since(svc.CreationTimestamp.Time))
+
+		// Truncate name if needed
+		name := svc.Name
+		if len(name) > 28 {
+			name = name[:25] + "..."
+		}
+
+		// Get external IP
+		externalIP := "<none>"
+		if len(svc.Status.LoadBalancer.Ingress) > 0 {
+			if svc.Status.LoadBalancer.Ingress[0].IP != "" {
+				externalIP = svc.Status.LoadBalancer.Ingress[0].IP
+			} else if svc.Status.LoadBalancer.Ingress[0].Hostname != "" {
+				externalIP = svc.Status.LoadBalancer.Ingress[0].Hostname
+			}
+		}
+
+		// Truncate external IP if too long
+		if len(externalIP) > 18 {
+			externalIP = externalIP[:15] + "..."
+		}
+
+		row := fmt.Sprintf("%-3s %-30s %-15s %-15s %-20s %-8s",
+			"●",
+			name,
+			svc.Spec.Type,
+			svc.Spec.ClusterIP,
+			externalIP,
+			age,
+		)
+
+		if i == m.Cursor {
+			rows = append(rows, styles.TableSelectedStyle.Render(row))
+		} else {
+			rows = append(rows, styles.TableRowStyle.Render(row))
+		}
+	}
+
+	// Add count footer
+	countFooter := fmt.Sprintf("\n%d services total", len(m.Services))
+	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
 }
 
 // formatDuration formats a duration in a human-readable way

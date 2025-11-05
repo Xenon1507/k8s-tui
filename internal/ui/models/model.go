@@ -10,6 +10,7 @@ import (
 	"github.com/Xenon1507/k8s-tui/internal/config"
 	"github.com/Xenon1507/k8s-tui/internal/k8s"
 	tea "github.com/charmbracelet/bubbletea"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -56,6 +57,8 @@ type Model struct {
 
 	// Data (exported for view access)
 	Pods         []corev1.Pod
+	Deployments  []appsv1.Deployment
+	Services     []corev1.Service
 	Namespaces   []corev1.Namespace
 	Contexts     []string
 	SelectedPod  *corev1.Pod
@@ -103,6 +106,18 @@ type NamespacesLoadedMsg struct{
 type LogsLoadedMsg struct {
 	Logs []string
 	Err  error
+}
+
+// DeploymentsLoadedMsg is sent when deployments are loaded
+type DeploymentsLoadedMsg struct {
+	Deployments []appsv1.Deployment
+	Err         error
+}
+
+// ServicesLoadedMsg is sent when services are loaded
+type ServicesLoadedMsg struct {
+	Services []corev1.Service
+	Err      error
 }
 
 // ErrorMsg represents an error message
@@ -200,6 +215,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ErrorMessage = ""
 		return m, nil
 
+	case DeploymentsLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading deployments: %v", msg.Err)
+			return m, nil
+		}
+		m.Deployments = msg.Deployments
+		m.ErrorMessage = ""
+		if m.Cursor >= len(m.Deployments) {
+			m.Cursor = 0
+		}
+		return m, nil
+
+	case ServicesLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading services: %v", msg.Err)
+			return m, nil
+		}
+		m.Services = msg.Services
+		m.ErrorMessage = ""
+		if m.Cursor >= len(m.Services) {
+			m.Cursor = 0
+		}
+		return m, nil
+
 	case ErrorMsg:
 		m.ErrorMessage = msg.Err.Error()
 		return m, nil
@@ -262,15 +303,18 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "1":
 			m.CurrentView = ViewPods
 			m.Cursor = 0
+			m.Loading = true
 			return m, m.loadPods()
 		case "2":
 			m.CurrentView = ViewDeployments
 			m.Cursor = 0
-			return m, nil
+			m.Loading = true
+			return m, m.loadDeployments()
 		case "3":
 			m.CurrentView = ViewServices
 			m.Cursor = 0
-			return m, nil
+			m.Loading = true
+			return m, m.loadServices()
 		case "n":
 			m.CurrentView = ViewNamespaces
 			m.Cursor = 0
@@ -281,6 +325,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "a":
 			m.AllNamespaces = !m.AllNamespaces
+			m.Loading = true
 			return m, m.loadPods()
 		}
 	}
@@ -294,11 +339,20 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.CurrentView == ViewPods && m.Cursor < len(m.Pods)-1 {
-				m.Cursor++
-			} else if m.CurrentView == ViewNamespaces && m.Cursor < len(m.Namespaces)-1 {
-				m.Cursor++
-			} else if m.CurrentView == ViewContexts && m.Cursor < len(m.Contexts)-1 {
+			maxCursor := 0
+			switch m.CurrentView {
+			case ViewPods:
+				maxCursor = len(m.Pods) - 1
+			case ViewDeployments:
+				maxCursor = len(m.Deployments) - 1
+			case ViewServices:
+				maxCursor = len(m.Services) - 1
+			case ViewNamespaces:
+				maxCursor = len(m.Namespaces) - 1
+			case ViewContexts:
+				maxCursor = len(m.Contexts) - 1
+			}
+			if m.Cursor < maxCursor {
 				m.Cursor++
 			}
 			return m, nil
@@ -350,7 +404,12 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.CurrentContext = newContext
 		m.CurrentView = ViewPods
 		m.Cursor = 0
-		return m, m.loadPods()
+		m.Loading = true
+		// Reload namespaces for new context
+		return m, tea.Batch(
+			m.loadNamespaces(),
+			m.loadPods(),
+		)
 	}
 
 	return m, nil
@@ -375,6 +434,32 @@ func (m Model) loadNamespaces() tea.Cmd {
 		ctx := context.Background()
 		namespaces, err := m.client.GetNamespaces(ctx)
 		return NamespacesLoadedMsg{Namespaces: namespaces, Err: err}
+	}
+}
+
+// loadDeployments loads deployments from the cluster
+func (m Model) loadDeployments() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		namespace := m.CurrentNamespace
+		if m.AllNamespaces {
+			namespace = ""
+		}
+		deployments, err := m.client.GetDeployments(ctx, namespace)
+		return DeploymentsLoadedMsg{Deployments: deployments, Err: err}
+	}
+}
+
+// loadServices loads services from the cluster
+func (m Model) loadServices() tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		namespace := m.CurrentNamespace
+		if m.AllNamespaces {
+			namespace = ""
+		}
+		services, err := m.client.GetServices(ctx, namespace)
+		return ServicesLoadedMsg{Services: services, Err: err}
 	}
 }
 
