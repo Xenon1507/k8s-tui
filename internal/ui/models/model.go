@@ -79,6 +79,9 @@ type Model struct {
 	ConfirmMsg     string
 	ConfirmAction  func() tea.Msg
 
+	// Log viewer state
+	LogViewOffset int // Scroll offset for log viewer
+
 	// Refresh
 	lastRefresh time.Time
 	autoRefresh bool
@@ -334,11 +337,36 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !m.ShowHelp && !m.ShowConfirm {
 		switch msg.String() {
 		case "up", "k":
+			// If in log view, scroll up
+			if m.CurrentPanel == PanelLogs {
+				if m.LogViewOffset > 0 {
+					m.LogViewOffset--
+				}
+				return m, nil
+			}
+			// Otherwise move cursor
 			if m.Cursor > 0 {
 				m.Cursor--
 			}
 			return m, nil
 		case "down", "j":
+			// If in log view, scroll down
+			if m.CurrentPanel == PanelLogs {
+				// Calculate max scroll (total lines - visible lines)
+				visibleLines := m.Height - 8 // Account for header, footer, margins
+				if visibleLines < 10 {
+					visibleLines = 10
+				}
+				maxScroll := len(m.Logs) - visibleLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.LogViewOffset < maxScroll {
+					m.LogViewOffset++
+				}
+				return m, nil
+			}
+			// Otherwise move cursor in list
 			maxCursor := 0
 			switch m.CurrentView {
 			case ViewPods:
@@ -356,6 +384,54 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.Cursor++
 			}
 			return m, nil
+		case "pgup":
+			// Page up in log view
+			if m.CurrentPanel == PanelLogs {
+				pageSize := (m.Height - 8) / 2
+				if pageSize < 5 {
+					pageSize = 5
+				}
+				m.LogViewOffset -= pageSize
+				if m.LogViewOffset < 0 {
+					m.LogViewOffset = 0
+				}
+				return m, nil
+			}
+		case "pgdown":
+			// Page down in log view
+			if m.CurrentPanel == PanelLogs {
+				pageSize := (m.Height - 8) / 2
+				if pageSize < 5 {
+					pageSize = 5
+				}
+				visibleLines := m.Height - 8
+				maxScroll := len(m.Logs) - visibleLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				m.LogViewOffset += pageSize
+				if m.LogViewOffset > maxScroll {
+					m.LogViewOffset = maxScroll
+				}
+				return m, nil
+			}
+		case "home":
+			// Jump to top in log view
+			if m.CurrentPanel == PanelLogs {
+				m.LogViewOffset = 0
+				return m, nil
+			}
+		case "end":
+			// Jump to bottom in log view
+			if m.CurrentPanel == PanelLogs {
+				visibleLines := m.Height - 8
+				maxScroll := len(m.Logs) - visibleLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				m.LogViewOffset = maxScroll
+				return m, nil
+			}
 		case "enter":
 			return m.handleEnter()
 		case "l":
@@ -364,6 +440,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.SelectedPod = &m.Pods[m.Cursor]
 				m.Loading = true
 				m.Logs = []string{} // Clear old logs
+				m.LogViewOffset = 0 // Reset scroll position
 				return m, m.loadLogs()
 			}
 		case "d":

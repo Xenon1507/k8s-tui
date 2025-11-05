@@ -106,6 +106,11 @@ func renderTab(key, label string, active bool) string {
 
 // renderPodsView renders the pods list view
 func renderPodsView(m models.Model) string {
+	// If viewing logs, show full-screen log view
+	if m.CurrentPanel == models.PanelLogs {
+		return renderPodLogsFullScreen(m)
+	}
+
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading pods...")
 	}
@@ -118,15 +123,13 @@ func renderPodsView(m models.Model) string {
 		return styles.PanelStyle.Render("No pods found")
 	}
 
-	// Split view: List on left, details/logs on right
+	// Split view: List on left, details on right
 	listView := renderPodsList(m)
 
 	var detailView string
 	switch m.CurrentPanel {
 	case models.PanelDetail:
 		detailView = renderPodDetail(m)
-	case models.PanelLogs:
-		detailView = renderPodLogs(m)
 	default:
 		detailView = styles.PanelStyle.Render("Select a pod and press Enter for details, or 'l' for logs")
 	}
@@ -258,8 +261,13 @@ func renderPodDetail(m models.Model) string {
 	return styles.ActivePanelStyle.Render(strings.Join(details, "\n"))
 }
 
-// renderPodLogs renders pod logs
+// renderPodLogs renders pod logs (deprecated - use renderPodLogsFullScreen)
 func renderPodLogs(m models.Model) string {
+	return renderPodLogsFullScreen(m)
+}
+
+// renderPodLogsFullScreen renders pod logs in full-screen mode with scrolling
+func renderPodLogsFullScreen(m models.Model) string {
 	if m.SelectedPod == nil {
 		return styles.PanelStyle.Render("No pod selected")
 	}
@@ -272,26 +280,66 @@ func renderPodLogs(m models.Model) string {
 		containerInfo = fmt.Sprintf(" (container: %s)", pod.Spec.Containers[0].Name)
 	}
 
-	header := styles.LogHeaderStyle.Render(fmt.Sprintf("Logs: %s%s", pod.Name, containerInfo))
+	header := styles.LogHeaderStyle.Render(fmt.Sprintf("📋 Logs: %s%s", pod.Name, containerInfo))
 
-	var logsContent string
+	var content string
 
 	if m.Loading {
-		logsContent = "Loading logs...\n\nPlease wait..."
+		content = "\n\nLoading logs...\n\nPlease wait..."
 	} else if m.ErrorMessage != "" {
-		logsContent = styles.ErrorStyle.Render(m.ErrorMessage)
+		content = "\n\n" + styles.ErrorStyle.Render(m.ErrorMessage)
 	} else if len(m.Logs) > 0 {
-		// Join logs with proper formatting
-		logsContent = strings.Join(m.Logs, "\n")
+		// Calculate visible area
+		availableHeight := m.Height - 8 // Account for header, footer, borders
+		if availableHeight < 10 {
+			availableHeight = 10
+		}
 
-		// Add helpful footer
-		footer := fmt.Sprintf("\n\n[%d lines] Press 'esc' to close", len(m.Logs))
-		logsContent += styles.HelpDescStyle.Render(footer)
+		// Get the visible slice of logs
+		startLine := m.LogViewOffset
+		endLine := startLine + availableHeight
+
+		if startLine >= len(m.Logs) {
+			startLine = len(m.Logs) - availableHeight
+			if startLine < 0 {
+				startLine = 0
+			}
+		}
+
+		if endLine > len(m.Logs) {
+			endLine = len(m.Logs)
+		}
+
+		visibleLogs := m.Logs[startLine:endLine]
+		content = "\n" + strings.Join(visibleLogs, "\n")
+
+		// Add scroll indicators
+		scrollInfo := ""
+		if len(m.Logs) > availableHeight {
+			scrollPercent := int(float64(startLine) / float64(len(m.Logs)-availableHeight) * 100)
+			if scrollPercent < 0 {
+				scrollPercent = 0
+			}
+			if scrollPercent > 100 {
+				scrollPercent = 100
+			}
+			scrollInfo = fmt.Sprintf(" [%d%%]", scrollPercent)
+		}
+
+		footer := fmt.Sprintf("\n[Lines %d-%d of %d%s] ↑↓/j/k: Scroll | Esc: Close",
+			startLine+1, endLine, len(m.Logs), scrollInfo)
+		content += styles.HelpDescStyle.Render(footer)
 	} else {
-		logsContent = "No logs available for this pod."
+		content = "\n\nNo logs available for this pod."
 	}
 
-	return styles.ActivePanelStyle.Render(header + "\n\n" + logsContent)
+	// Render in full width
+	fullContent := header + content
+
+	return styles.LogStyle.
+		Width(m.Width - 4).
+		Height(m.Height - 6).
+		Render(fullContent)
 }
 
 // renderNamespacesView renders the namespaces list
