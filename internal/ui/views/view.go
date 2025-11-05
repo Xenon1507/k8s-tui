@@ -1449,8 +1449,23 @@ func renderHelmReleasesList(m models.Model) string {
 			rows = append(rows, styles.TableRowStyle.Render("No releases match your search"))
 		} else if m.Loading {
 			rows = append(rows, styles.TableRowStyle.Render("Loading releases..."))
+		} else if !m.HelmAvailable {
+			// Helm is not installed or not found in PATH
+			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+			rows = append(rows, errorStyle.Render("Helm not found in PATH"))
+			rows = append(rows, "")
+			rows = append(rows, styles.HelpDescStyle.Render("Please install Helm: https://helm.sh/docs/intro/install/"))
+			rows = append(rows, styles.HelpDescStyle.Render("Or add Helm to your PATH if already installed"))
+			rows = append(rows, "")
+			rows = append(rows, styles.HelpDescStyle.Render("Check with: which helm"))
+		} else if m.ErrorMessage != "" {
+			// Show error message if one is set (e.g., API error)
+			errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000"))
+			rows = append(rows, errorStyle.Render(m.ErrorMessage))
 		} else {
 			rows = append(rows, styles.TableRowStyle.Render("No Helm releases found"))
+			rows = append(rows, "")
+			rows = append(rows, styles.HelpDescStyle.Render("Run 'helm list -A' to verify"))
 		}
 		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
 	}

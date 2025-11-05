@@ -56,7 +56,8 @@ type Model struct {
 	config *config.Config
 
 	// Helm client
-	helmClient *helm.Client
+	helmClient    *helm.Client
+	HelmAvailable bool // True if Helm is installed and available
 
 	// Current state (exported for access from main)
 	CurrentView      ViewMode
@@ -209,12 +210,14 @@ func NewModel(client *k8s.Client, cfg *config.Config) Model {
 	contexts := client.GetContexts()
 
 	// Try to initialize Helm client (may be nil if helm not installed)
-	helmClient, _ := helm.NewClient()
+	helmClient, err := helm.NewClient()
+	helmAvailable := err == nil && helmClient != nil
 
 	return Model{
 		client:           client,
 		config:           cfg,
 		helmClient:       helmClient,
+		HelmAvailable:    helmAvailable,
 		CurrentView:      ViewPods,
 		CurrentPanel:     PanelList,
 		CurrentNamespace: currentNs,
