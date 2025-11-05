@@ -212,6 +212,9 @@ func NewModel(client *k8s.Client, cfg *config.Config) Model {
 	// Try to initialize Helm client (may be nil if helm not installed)
 	helmClient, err := helm.NewClient()
 	helmAvailable := err == nil && helmClient != nil
+	if helmClient != nil {
+		helmClient.SetContext(currentCtx)
+	}
 
 	return Model{
 		client:           client,
@@ -777,12 +780,22 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadNodes()
-		case "5", "h":
+		case "5":
 			m.CurrentView = ViewHelmReleases
 			m.Cursor = 0
 			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadHelmReleases()
+		case "h":
+			// "h" switches to Helm view only if not already there
+			// This allows "h" to be used for history when in Helm view
+			if m.CurrentView != ViewHelmReleases {
+				m.CurrentView = ViewHelmReleases
+				m.Cursor = 0
+				m.ListViewOffset = 0
+				m.Loading = true
+				return m, m.loadHelmReleases()
+			}
 		case "n":
 			m.CurrentView = ViewNamespaces
 			m.Cursor = 0
@@ -894,6 +907,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				maxCursor = len(m.Services) - 1
 			case ViewNodes:
 				maxCursor = len(m.Nodes) - 1
+			case ViewHelmReleases:
+				maxCursor = len(m.HelmReleases) - 1
 			case ViewNamespaces:
 				maxCursor = len(m.Namespaces) - 1
 			case ViewContexts:
@@ -1008,8 +1023,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.CurrentView == ViewHelmReleases && !m.ShowHelp && !m.ShowConfirm && !m.SearchActive {
 		switch msg.String() {
 		case "h":
-			// Check if we're not in the list view (to avoid conflict with "5"/"h" view switcher)
-			if m.SelectedRelease != nil {
+			// Show history for selected or currently highlighted release
+			if len(m.HelmReleases) > 0 {
+				// If no release is selected, use the currently highlighted one
+				if m.SelectedRelease == nil {
+					m.SelectedRelease = &m.HelmReleases[m.Cursor]
+				}
 				m.CurrentPanel = PanelHelmHistory
 				m.Loading = true
 				m.HistoryViewOffset = 0
@@ -1077,6 +1096,11 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.CurrentContext = newContext
 		m.CurrentNamespace = "default"
 		m.Contexts = m.client.GetContexts() // Refresh contexts list
+
+		// Update Helm context if available
+		if m.helmClient != nil {
+			m.helmClient.SetContext(newContext)
+		}
 
 		// Go to pods view
 		m.CurrentView = ViewPods

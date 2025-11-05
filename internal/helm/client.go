@@ -66,6 +66,7 @@ type ReleaseHistory struct {
 // Client wraps Helm CLI operations
 type Client struct {
 	helmPath string
+	context  string
 }
 
 // NewClient creates a new Helm client
@@ -81,9 +82,18 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
+// SetContext sets the Kubernetes context for Helm operations
+func (c *Client) SetContext(context string) {
+	c.context = context
+}
+
 // ListReleases returns all Helm releases across all namespaces
 func (c *Client) ListReleases() ([]Release, error) {
-	cmd := exec.Command(c.helmPath, "list", "-A", "--output", "json")
+	args := []string{"list", "-A", "--output", "json"}
+	if c.context != "" {
+		args = append(args, "--kube-context", c.context)
+	}
+	cmd := exec.Command(c.helmPath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -103,7 +113,11 @@ func (c *Client) ListReleases() ([]Release, error) {
 
 // GetReleaseStatus returns detailed status for a specific release
 func (c *Client) GetReleaseStatus(name, namespace string) (*Release, error) {
-	cmd := exec.Command(c.helmPath, "status", name, "-n", namespace, "--output", "json")
+	args := []string{"status", name, "-n", namespace, "--output", "json"}
+	if c.context != "" {
+		args = append(args, "--kube-context", c.context)
+	}
+	cmd := exec.Command(c.helmPath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -151,7 +165,11 @@ func (c *Client) GetReleaseStatus(name, namespace string) (*Release, error) {
 
 // GetReleaseHistory returns the revision history for a release
 func (c *Client) GetReleaseHistory(name, namespace string) ([]ReleaseHistory, error) {
-	cmd := exec.Command(c.helmPath, "history", name, "-n", namespace, "--output", "json")
+	args := []string{"history", name, "-n", namespace, "--output", "json"}
+	if c.context != "" {
+		args = append(args, "--kube-context", c.context)
+	}
+	cmd := exec.Command(c.helmPath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -171,7 +189,11 @@ func (c *Client) GetReleaseHistory(name, namespace string) ([]ReleaseHistory, er
 
 // GetReleaseValues returns the values for a release
 func (c *Client) GetReleaseValues(name, namespace string) (string, error) {
-	cmd := exec.Command(c.helmPath, "get", "values", name, "-n", namespace, "--output", "yaml")
+	args := []string{"get", "values", name, "-n", namespace, "--output", "yaml"}
+	if c.context != "" {
+		args = append(args, "--kube-context", c.context)
+	}
+	cmd := exec.Command(c.helmPath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -186,7 +208,11 @@ func (c *Client) GetReleaseValues(name, namespace string) (string, error) {
 
 // GetReleaseManifest returns the rendered manifest for a release
 func (c *Client) GetReleaseManifest(name, namespace string) (string, error) {
-	cmd := exec.Command(c.helmPath, "get", "manifest", name, "-n", namespace)
+	args := []string{"get", "manifest", name, "-n", namespace}
+	if c.context != "" {
+		args = append(args, "--kube-context", c.context)
+	}
+	cmd := exec.Command(c.helmPath, args...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
