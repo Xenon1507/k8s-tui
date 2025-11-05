@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Xenon1507/k8s-tui/internal/config"
+	"github.com/Xenon1507/k8s-tui/internal/helm"
 	"github.com/Xenon1507/k8s-tui/internal/k8s"
 	tea "github.com/charmbracelet/bubbletea"
 	appsv1 "k8s.io/api/apps/v1"
@@ -22,6 +24,7 @@ const (
 	ViewDeployments
 	ViewServices
 	ViewNodes
+	ViewHelmReleases
 	ViewConfigMaps
 	ViewSecrets
 	ViewIngresses
@@ -41,6 +44,9 @@ const (
 	PanelDetail
 	PanelLogs
 	PanelHelp
+	PanelHelmHistory
+	PanelHelmManifest
+	PanelHelmValues
 )
 
 // Model represents the main application model
@@ -48,6 +54,9 @@ type Model struct {
 	// Kubernetes client
 	client *k8s.Client
 	config *config.Config
+
+	// Helm client
+	helmClient *helm.Client
 
 	// Current state (exported for access from main)
 	CurrentView      ViewMode
@@ -70,6 +79,16 @@ type Model struct {
 	SelectedNode       *corev1.Node
 	PodEvents          []corev1.Event
 	Logs               []string
+
+	// Helm data
+	HelmReleases        []helm.Release
+	SelectedRelease     *helm.Release
+	ReleaseHistory      []helm.ReleaseHistory
+	ReleaseValues       string
+	ReleaseManifest     string
+	ManifestViewOffset  int
+	ValuesViewOffset    int
+	HistoryViewOffset   int
 
 	// UI state (exported for view access)
 	Cursor         int
@@ -149,6 +168,30 @@ type NodesLoadedMsg struct {
 	Err      error
 }
 
+// HelmReleasesLoadedMsg represents loaded Helm releases
+type HelmReleasesLoadedMsg struct {
+	Releases []helm.Release
+	Err      error
+}
+
+// HelmHistoryLoadedMsg represents loaded Helm release history
+type HelmHistoryLoadedMsg struct {
+	History []helm.ReleaseHistory
+	Err     error
+}
+
+// HelmValuesLoadedMsg represents loaded Helm release values
+type HelmValuesLoadedMsg struct {
+	Values string
+	Err    error
+}
+
+// HelmManifestLoadedMsg represents loaded Helm release manifest
+type HelmManifestLoadedMsg struct {
+	Manifest string
+	Err      error
+}
+
 // ErrorMsg represents an error message
 type ErrorMsg struct {
 	Err error
@@ -165,9 +208,13 @@ func NewModel(client *k8s.Client, cfg *config.Config) Model {
 	currentCtx := client.GetCurrentContext()
 	contexts := client.GetContexts()
 
+	// Try to initialize Helm client (may be nil if helm not installed)
+	helmClient, _ := helm.NewClient()
+
 	return Model{
 		client:           client,
 		config:           cfg,
+		helmClient:       helmClient,
 		CurrentView:      ViewPods,
 		CurrentPanel:     PanelList,
 		CurrentNamespace: currentNs,
@@ -176,6 +223,7 @@ func NewModel(client *k8s.Client, cfg *config.Config) Model {
 		AllNamespaces:    false,
 		Pods:             []corev1.Pod{},
 		Namespaces:       []corev1.Namespace{},
+		HelmReleases:     []helm.Release{},
 		Cursor:           0,
 		autoRefresh:      true,
 		lastRefresh:      time.Now(),
@@ -342,6 +390,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case HelmReleasesLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading helm releases: %v", msg.Err)
+			return m, nil
+		}
+		m.HelmReleases = msg.Releases
+		m.ErrorMessage = ""
+		if m.Cursor >= len(m.HelmReleases) {
+			m.Cursor = 0
+		}
+		return m, nil
+
+	case HelmHistoryLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading helm history: %v", msg.Err)
+			return m, nil
+		}
+		m.ReleaseHistory = msg.History
+		m.ErrorMessage = ""
+		return m, nil
+
+	case HelmValuesLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading helm values: %v", msg.Err)
+			return m, nil
+		}
+		m.ReleaseValues = msg.Values
+		m.ErrorMessage = ""
+		return m, nil
+
+	case HelmManifestLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading helm manifest: %v", msg.Err)
+			return m, nil
+		}
+		m.ReleaseManifest = msg.Manifest
+		m.ErrorMessage = ""
+		return m, nil
+
 	case ErrorMsg:
 		m.ErrorMessage = msg.Err.Error()
 		return m, nil
@@ -408,6 +499,8 @@ func (m Model) getFilteredCount() int {
 			return len(m.Services)
 		case ViewNodes:
 			return len(m.Nodes)
+		case ViewHelmReleases:
+			return len(m.HelmReleases)
 		case ViewNamespaces:
 			return len(m.Namespaces)
 		case ViewContexts:
@@ -445,6 +538,15 @@ func (m Model) getFilteredCount() int {
 	case ViewNodes:
 		for _, node := range m.Nodes {
 			if matchesSearch(node.Name, m.SearchQuery) {
+				count++
+			}
+		}
+	case ViewHelmReleases:
+		for _, release := range m.HelmReleases {
+			if matchesSearch(release.Name, m.SearchQuery) ||
+				matchesSearch(release.Namespace, m.SearchQuery) ||
+				matchesSearch(release.Status, m.SearchQuery) ||
+				matchesSearch(release.Chart, m.SearchQuery) {
 				count++
 			}
 		}
@@ -507,6 +609,18 @@ func (m Model) mapFilteredIndexToReal(filteredIdx int) int {
 	case ViewNodes:
 		for i, node := range m.Nodes {
 			if matchesSearch(node.Name, m.SearchQuery) {
+				if currentFilteredIdx == filteredIdx {
+					return i
+				}
+				currentFilteredIdx++
+			}
+		}
+	case ViewHelmReleases:
+		for i, release := range m.HelmReleases {
+			if matchesSearch(release.Name, m.SearchQuery) ||
+				matchesSearch(release.Namespace, m.SearchQuery) ||
+				matchesSearch(release.Status, m.SearchQuery) ||
+				matchesSearch(release.Chart, m.SearchQuery) {
 				if currentFilteredIdx == filteredIdx {
 					return i
 				}
@@ -660,6 +774,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadNodes()
+		case "5", "h":
+			m.CurrentView = ViewHelmReleases
+			m.Cursor = 0
+			m.ListViewOffset = 0
+			m.Loading = true
+			return m, m.loadHelmReleases()
 		case "n":
 			m.CurrentView = ViewNamespaces
 			m.Cursor = 0
@@ -688,6 +808,20 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// If in Helm values view, scroll up
+			if m.CurrentPanel == PanelHelmValues {
+				if m.ValuesViewOffset > 0 {
+					m.ValuesViewOffset--
+				}
+				return m, nil
+			}
+			// If in Helm manifest view, scroll up
+			if m.CurrentPanel == PanelHelmManifest {
+				if m.ManifestViewOffset > 0 {
+					m.ManifestViewOffset--
+				}
+				return m, nil
+			}
 			// Otherwise move cursor
 			if m.Cursor > 0 {
 				m.Cursor--
@@ -711,6 +845,38 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				if m.LogViewOffset < maxScroll {
 					m.LogViewOffset++
+				}
+				return m, nil
+			}
+			// If in Helm values view, scroll down
+			if m.CurrentPanel == PanelHelmValues {
+				visibleLines := m.Height - 10
+				if visibleLines < 10 {
+					visibleLines = 10
+				}
+				valueLines := strings.Split(m.ReleaseValues, "\n")
+				maxScroll := len(valueLines) - visibleLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.ValuesViewOffset < maxScroll {
+					m.ValuesViewOffset++
+				}
+				return m, nil
+			}
+			// If in Helm manifest view, scroll down
+			if m.CurrentPanel == PanelHelmManifest {
+				visibleLines := m.Height - 10
+				if visibleLines < 10 {
+					visibleLines = 10
+				}
+				manifestLines := strings.Split(m.ReleaseManifest, "\n")
+				maxScroll := len(manifestLines) - visibleLines
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.ManifestViewOffset < maxScroll {
+					m.ManifestViewOffset++
 				}
 				return m, nil
 			}
@@ -816,6 +982,36 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.ConfirmAction = m.deletePod
 				return m, nil
 			}
+		case "v":
+			// Show Helm values
+			if m.CurrentView == ViewHelmReleases && m.SelectedRelease != nil {
+				m.CurrentPanel = PanelHelmValues
+				m.Loading = true
+				m.ValuesViewOffset = 0
+				return m, m.loadHelmValues()
+			}
+		case "m":
+			// Show Helm manifest
+			if m.CurrentView == ViewHelmReleases && m.SelectedRelease != nil {
+				m.CurrentPanel = PanelHelmManifest
+				m.Loading = true
+				m.ManifestViewOffset = 0
+				return m, m.loadHelmManifest()
+			}
+		}
+	}
+
+	// Handle Helm-specific keys (need to check without SearchActive restriction for detail views)
+	if m.CurrentView == ViewHelmReleases && !m.ShowHelp && !m.ShowConfirm && !m.SearchActive {
+		switch msg.String() {
+		case "h":
+			// Check if we're not in the list view (to avoid conflict with "5"/"h" view switcher)
+			if m.SelectedRelease != nil {
+				m.CurrentPanel = PanelHelmHistory
+				m.Loading = true
+				m.HistoryViewOffset = 0
+				return m, m.loadHelmHistory()
+			}
 		}
 	}
 
@@ -844,6 +1040,12 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	if m.CurrentView == ViewNodes && len(m.Nodes) > 0 {
 		m.SelectedNode = &m.Nodes[m.Cursor]
+		m.CurrentPanel = PanelDetail
+		return m, nil
+	}
+
+	if m.CurrentView == ViewHelmReleases && len(m.HelmReleases) > 0 {
+		m.SelectedRelease = &m.HelmReleases[m.Cursor]
 		m.CurrentPanel = PanelDetail
 		return m, nil
 	}
@@ -1217,6 +1419,69 @@ func (m Model) deletePod() tea.Msg {
 	}
 
 	return SuccessMsg{Message: fmt.Sprintf("Pod %s deleted", pod.Name)}
+}
+
+// loadHelmReleases loads all Helm releases
+func (m Model) loadHelmReleases() tea.Cmd {
+	return func() tea.Msg {
+		if m.helmClient == nil {
+			return HelmReleasesLoadedMsg{
+				Releases: []helm.Release{},
+				Err:      fmt.Errorf("helm not installed"),
+			}
+		}
+
+		releases, err := m.helmClient.ListReleases()
+		return HelmReleasesLoadedMsg{
+			Releases: releases,
+			Err:      err,
+		}
+	}
+}
+
+// loadHelmHistory loads history for selected release
+func (m Model) loadHelmHistory() tea.Cmd {
+	return func() tea.Msg {
+		if m.helmClient == nil || m.SelectedRelease == nil {
+			return HelmHistoryLoadedMsg{Err: fmt.Errorf("helm not available")}
+		}
+
+		history, err := m.helmClient.GetReleaseHistory(m.SelectedRelease.Name, m.SelectedRelease.Namespace)
+		return HelmHistoryLoadedMsg{
+			History: history,
+			Err:     err,
+		}
+	}
+}
+
+// loadHelmValues loads values for selected release
+func (m Model) loadHelmValues() tea.Cmd {
+	return func() tea.Msg {
+		if m.helmClient == nil || m.SelectedRelease == nil {
+			return HelmValuesLoadedMsg{Err: fmt.Errorf("helm not available")}
+		}
+
+		values, err := m.helmClient.GetReleaseValues(m.SelectedRelease.Name, m.SelectedRelease.Namespace)
+		return HelmValuesLoadedMsg{
+			Values: values,
+			Err:    err,
+		}
+	}
+}
+
+// loadHelmManifest loads manifest for selected release
+func (m Model) loadHelmManifest() tea.Cmd {
+	return func() tea.Msg {
+		if m.helmClient == nil || m.SelectedRelease == nil {
+			return HelmManifestLoadedMsg{Err: fmt.Errorf("helm not available")}
+		}
+
+		manifest, err := m.helmClient.GetReleaseManifest(m.SelectedRelease.Name, m.SelectedRelease.Namespace)
+		return HelmManifestLoadedMsg{
+			Manifest: manifest,
+			Err:      err,
+		}
+	}
 }
 
 // tickCmd creates a tick command for auto-refresh

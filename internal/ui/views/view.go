@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xenon1507/k8s-tui/internal/helm"
 	"github.com/Xenon1507/k8s-tui/internal/k8s"
 	"github.com/Xenon1507/k8s-tui/internal/ui/models"
 	"github.com/Xenon1507/k8s-tui/internal/ui/styles"
@@ -35,6 +36,8 @@ func View(m models.Model) string {
 		content = renderServicesView(m)
 	case models.ViewNodes:
 		content = renderNodesView(m)
+	case models.ViewHelmReleases:
+		content = renderHelmReleasesView(m)
 	case models.ViewNamespaces:
 		content = renderNamespacesView(m)
 	case models.ViewContexts:
@@ -92,6 +95,7 @@ func renderTabs(m models.Model) string {
 		renderTab("2", "Deployments", m.CurrentView == models.ViewDeployments),
 		renderTab("3", "Services", m.CurrentView == models.ViewServices),
 		renderTab("4", "Nodes", m.CurrentView == models.ViewNodes),
+		renderTab("5", "Helm", m.CurrentView == models.ViewHelmReleases),
 		renderTab("n", "Namespaces", m.CurrentView == models.ViewNamespaces),
 		renderTab("c", "Contexts", m.CurrentView == models.ViewContexts),
 	}
@@ -248,6 +252,13 @@ func renderPodDetail(m models.Model) string {
 	details = append(details, styles.SubHeaderStyle.Render(fmt.Sprintf("Pod: %s", pod.Name)))
 	details = append(details, "")
 	details = append(details, fmt.Sprintf("Namespace: %s", pod.Namespace))
+
+	// Show Helm release if managed by Helm
+	if releaseName := helm.GetReleaseNameFromLabels(pod.Labels); releaseName != "" {
+		helmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00CED1")) // Cyan
+		details = append(details, fmt.Sprintf("Helm Release: %s", helmStyle.Render(releaseName)))
+	}
+
 	details = append(details, fmt.Sprintf("Status: %s", status.Phase))
 	details = append(details, fmt.Sprintf("Ready: %s", status.Ready))
 	details = append(details, fmt.Sprintf("Restarts: %d", status.Restarts))
@@ -763,6 +774,13 @@ func renderDeploymentDetail(m models.Model) string {
 	details = append(details, styles.SubHeaderStyle.Render(fmt.Sprintf("Deployment: %s", deploy.Name)))
 	details = append(details, "")
 	details = append(details, fmt.Sprintf("Namespace: %s", deploy.Namespace))
+
+	// Show Helm release if managed by Helm
+	if releaseName := helm.GetReleaseNameFromLabels(deploy.Labels); releaseName != "" {
+		helmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00CED1")) // Cyan
+		details = append(details, fmt.Sprintf("Helm Release: %s", helmStyle.Render(releaseName)))
+	}
+
 	details = append(details, fmt.Sprintf("Replicas: %d", deploy.Status.Replicas))
 	details = append(details, fmt.Sprintf("Ready: %d/%d", deploy.Status.ReadyReplicas, deploy.Status.Replicas))
 	details = append(details, fmt.Sprintf("Up-to-date: %d", deploy.Status.UpdatedReplicas))
@@ -980,6 +998,13 @@ func renderServiceDetail(m models.Model) string {
 	details = append(details, styles.SubHeaderStyle.Render(fmt.Sprintf("Service: %s", svc.Name)))
 	details = append(details, "")
 	details = append(details, fmt.Sprintf("Namespace: %s", svc.Namespace))
+
+	// Show Helm release if managed by Helm
+	if releaseName := helm.GetReleaseNameFromLabels(svc.Labels); releaseName != "" {
+		helmStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00CED1")) // Cyan
+		details = append(details, fmt.Sprintf("Helm Release: %s", helmStyle.Render(releaseName)))
+	}
+
 	details = append(details, fmt.Sprintf("Type: %s", svc.Spec.Type))
 	details = append(details, fmt.Sprintf("Cluster IP: %s", svc.Spec.ClusterIP))
 	details = append(details, fmt.Sprintf("Age: %s", formatDuration(time.Since(svc.CreationTimestamp.Time))))
@@ -1368,4 +1393,346 @@ func matchesSearch(text, query string) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(text), strings.ToLower(query))
+}
+
+// renderHelmReleasesView renders the Helm releases view
+func renderHelmReleasesView(m models.Model) string {
+	if m.CurrentPanel == models.PanelDetail {
+		return renderHelmReleaseDetail(m)
+	}
+	if m.CurrentPanel == models.PanelHelmHistory {
+		return renderHelmHistory(m)
+	}
+	if m.CurrentPanel == models.PanelHelmValues {
+		return renderHelmValues(m)
+	}
+	if m.CurrentPanel == models.PanelHelmManifest {
+		return renderHelmManifest(m)
+	}
+
+	// List view
+	return renderHelmReleasesList(m)
+}
+
+// renderHelmReleasesList renders the list of Helm releases
+func renderHelmReleasesList(m models.Model) string {
+	var rows []string
+
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	}
+
+	// Table header
+	header := fmt.Sprintf("%-3s %-25s %-15s %-10s %-20s %-12s %-10s",
+		"", "NAME", "NAMESPACE", "STATUS", "CHART", "APP VERSION", "UPDATED")
+	rows = append(rows, styles.TableHeaderStyle.Render(header))
+
+	// Filter releases if search is active
+	filteredReleases := m.HelmReleases
+	if m.SearchQuery != "" {
+		filteredReleases = []helm.Release{}
+		for _, release := range m.HelmReleases {
+			if matchesSearch(release.Name, m.SearchQuery) ||
+				matchesSearch(release.Namespace, m.SearchQuery) ||
+				matchesSearch(release.Status, m.SearchQuery) ||
+				matchesSearch(release.Chart, m.SearchQuery) {
+				filteredReleases = append(filteredReleases, release)
+			}
+		}
+	}
+
+	if len(filteredReleases) == 0 {
+		if m.SearchQuery != "" {
+			rows = append(rows, styles.TableRowStyle.Render("No releases match your search"))
+		} else if m.Loading {
+			rows = append(rows, styles.TableRowStyle.Render("Loading releases..."))
+		} else {
+			rows = append(rows, styles.TableRowStyle.Render("No Helm releases found"))
+		}
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	// Render releases
+	for i, release := range filteredReleases {
+		// Status color coding
+		statusStyle := lipgloss.NewStyle()
+		switch strings.ToLower(release.Status) {
+		case "deployed":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#00FF00")) // Green
+		case "failed":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#FF0000")) // Red
+		case "pending-install", "pending-upgrade":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#FFFF00")) // Yellow
+		case "superseded":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#FFA500")) // Orange
+		default:
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#AAAAAA")) // Gray
+		}
+
+		// Format updated time
+		updated := formatRelativeTime(release.Updated)
+
+		row := fmt.Sprintf("%-25s %-15s %-10s %-20s %-12s %-10s",
+			truncate(release.Name, 25),
+			truncate(release.Namespace, 15),
+			statusStyle.Render(truncate(release.Status, 10)),
+			truncate(release.Chart, 20),
+			truncate(release.AppVersion, 12),
+			updated,
+		)
+
+		if i == m.Cursor {
+			rows = append(rows, styles.TableSelectedStyle.Render("▶ "+row))
+		} else {
+			rows = append(rows, styles.TableRowStyle.Render("  "+row))
+		}
+	}
+
+	// Add total count
+	totalStr := fmt.Sprintf("%d releases total", len(m.HelmReleases))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d releases (filtered)", len(filteredReleases), len(m.HelmReleases))
+	}
+	rows = append(rows, "")
+	rows = append(rows, styles.HelpDescStyle.Render(totalStr))
+	rows = append(rows, styles.HelpDescStyle.Render("Press Enter for details | h:History | v:Values | m:Manifest"))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderHelmReleaseDetail renders the detail view for a selected Helm release
+func renderHelmReleaseDetail(m models.Model) string {
+	if m.SelectedRelease == nil {
+		return styles.PanelStyle.Render("No release selected")
+	}
+
+	release := m.SelectedRelease
+	var rows []string
+
+	// Title
+	title := fmt.Sprintf("Release: %s", release.Name)
+	rows = append(rows, styles.SubHeaderStyle.Render(title))
+	rows = append(rows, "")
+
+	// Status with color
+	statusStyle := lipgloss.NewStyle()
+	switch strings.ToLower(release.Status) {
+	case "deployed":
+		statusStyle = statusStyle.Foreground(lipgloss.Color("#00FF00"))
+	case "failed":
+		statusStyle = statusStyle.Foreground(lipgloss.Color("#FF0000"))
+	default:
+		statusStyle = statusStyle.Foreground(lipgloss.Color("#FFFF00"))
+	}
+
+	// Release information
+	rows = append(rows, fmt.Sprintf("%-18s %s", "Status:", statusStyle.Render(release.Status)))
+	rows = append(rows, fmt.Sprintf("%-18s %s", "Namespace:", release.Namespace))
+	rows = append(rows, fmt.Sprintf("%-18s %s", "Chart:", release.Chart))
+	rows = append(rows, fmt.Sprintf("%-18s %s", "App Version:", release.AppVersion))
+	rows = append(rows, fmt.Sprintf("%-18s %s", "Revision:", release.Revision))
+	rows = append(rows, fmt.Sprintf("%-18s %s", "Updated:", release.Updated.Format("2006-01-02 15:04:05")))
+
+	if release.Description != "" {
+		rows = append(rows, "")
+		rows = append(rows, fmt.Sprintf("%-18s %s", "Description:", release.Description))
+	}
+
+	rows = append(rows, "")
+	rows = append(rows, styles.HelpDescStyle.Render("Press ESC to go back | h:History | v:Values | m:Manifest"))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderHelmHistory renders the history for a selected Helm release
+func renderHelmHistory(m models.Model) string {
+	if m.SelectedRelease == nil {
+		return styles.PanelStyle.Render("No release selected")
+	}
+
+	var rows []string
+	title := fmt.Sprintf("Release History: %s", m.SelectedRelease.Name)
+	rows = append(rows, styles.SubHeaderStyle.Render(title))
+	rows = append(rows, "")
+
+	if m.Loading {
+		rows = append(rows, "Loading history...")
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	if len(m.ReleaseHistory) == 0 {
+		rows = append(rows, "No history available")
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	// Table header
+	header := fmt.Sprintf("%-10s %-20s %-15s %-20s %-30s",
+		"REVISION", "UPDATED", "STATUS", "CHART", "DESCRIPTION")
+	rows = append(rows, styles.TableHeaderStyle.Render(header))
+
+	// Render history
+	for _, hist := range m.ReleaseHistory {
+		statusStyle := lipgloss.NewStyle()
+		switch strings.ToLower(hist.Status) {
+		case "deployed":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#00FF00"))
+		case "superseded":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#FFA500"))
+		case "failed":
+			statusStyle = statusStyle.Foreground(lipgloss.Color("#FF0000"))
+		}
+
+		row := fmt.Sprintf("%-10d %-20s %-15s %-20s %-30s",
+			hist.Revision,
+			hist.Updated.Format("2006-01-02 15:04:05"),
+			statusStyle.Render(truncate(hist.Status, 15)),
+			truncate(hist.Chart, 20),
+			truncate(hist.Description, 30),
+		)
+		rows = append(rows, styles.TableRowStyle.Render(row))
+	}
+
+	rows = append(rows, "")
+	rows = append(rows, styles.HelpDescStyle.Render("Press ESC to go back"))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderHelmValues renders the values for a selected Helm release
+func renderHelmValues(m models.Model) string {
+	if m.SelectedRelease == nil {
+		return styles.PanelStyle.Render("No release selected")
+	}
+
+	var rows []string
+	title := fmt.Sprintf("Release Values: %s", m.SelectedRelease.Name)
+	rows = append(rows, styles.SubHeaderStyle.Render(title))
+	rows = append(rows, "")
+
+	if m.Loading {
+		rows = append(rows, "Loading values...")
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	if m.ReleaseValues == "" {
+		rows = append(rows, "No values available (using defaults)")
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	// Split values into lines and handle scrolling
+	valueLines := strings.Split(m.ReleaseValues, "\n")
+	availableHeight := m.Height - 10
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	startIdx := m.ValuesViewOffset
+	endIdx := startIdx + availableHeight
+	if endIdx > len(valueLines) {
+		endIdx = len(valueLines)
+	}
+	if startIdx >= len(valueLines) {
+		startIdx = 0
+	}
+
+	visibleLines := valueLines[startIdx:endIdx]
+	rows = append(rows, visibleLines...)
+
+	// Add scroll indicator
+	if len(valueLines) > availableHeight {
+		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %d lines] Use ↑↓ to scroll",
+			startIdx+1, endIdx, len(valueLines))
+		rows = append(rows, styles.HelpDescStyle.Render(scrollInfo))
+	}
+
+	rows = append(rows, "")
+	rows = append(rows, styles.HelpDescStyle.Render("Press ESC to go back"))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderHelmManifest renders the manifest for a selected Helm release
+func renderHelmManifest(m models.Model) string {
+	if m.SelectedRelease == nil {
+		return styles.PanelStyle.Render("No release selected")
+	}
+
+	var rows []string
+	title := fmt.Sprintf("Release Manifest: %s", m.SelectedRelease.Name)
+	rows = append(rows, styles.SubHeaderStyle.Render(title))
+	rows = append(rows, "")
+
+	if m.Loading {
+		rows = append(rows, "Loading manifest...")
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	if m.ReleaseManifest == "" {
+		rows = append(rows, "No manifest available")
+		return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+	}
+
+	// Split manifest into lines and handle scrolling
+	manifestLines := strings.Split(m.ReleaseManifest, "\n")
+	availableHeight := m.Height - 10
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	startIdx := m.ManifestViewOffset
+	endIdx := startIdx + availableHeight
+	if endIdx > len(manifestLines) {
+		endIdx = len(manifestLines)
+	}
+	if startIdx >= len(manifestLines) {
+		startIdx = 0
+	}
+
+	visibleLines := manifestLines[startIdx:endIdx]
+	rows = append(rows, visibleLines...)
+
+	// Add scroll indicator
+	if len(manifestLines) > availableHeight {
+		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %d lines] Use ↑↓ to scroll",
+			startIdx+1, endIdx, len(manifestLines))
+		rows = append(rows, styles.HelpDescStyle.Render(scrollInfo))
+	}
+
+	rows = append(rows, "")
+	rows = append(rows, styles.HelpDescStyle.Render("Press ESC to go back"))
+
+	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// formatRelativeTime formats a time relative to now
+func formatRelativeTime(t time.Time) string {
+	duration := time.Since(t)
+
+	if duration < time.Minute {
+		return "just now"
+	}
+	if duration < time.Hour {
+		minutes := int(duration.Minutes())
+		return fmt.Sprintf("%dm ago", minutes)
+	}
+	if duration < 24*time.Hour {
+		hours := int(duration.Hours())
+		return fmt.Sprintf("%dh ago", hours)
+	}
+	days := int(duration.Hours() / 24)
+	return fmt.Sprintf("%dd ago", days)
+}
+
+// truncate truncates a string to a maximum length
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
