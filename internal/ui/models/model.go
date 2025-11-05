@@ -79,6 +79,7 @@ type Model struct {
 	SuccessMessage string
 	Loading        bool
 	SearchQuery    string
+	SearchActive   bool // True when user is typing in search
 	FilterQuery    string
 	ShowHelp       bool
 	ShowConfirm    bool
@@ -375,6 +376,12 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case "esc":
+		if m.SearchActive {
+			m.SearchActive = false
+			m.SearchQuery = ""
+			m.Cursor = 0 // Reset cursor when exiting search
+			return m, nil
+		}
 		if m.ShowHelp {
 			m.ShowHelp = false
 			return m, nil
@@ -391,14 +398,42 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ShowHelp = !m.ShowHelp
 		return m, nil
 	case "r":
-		if !m.ShowHelp && !m.ShowConfirm {
+		if !m.ShowHelp && !m.ShowConfirm && !m.SearchActive {
 			m.Loading = true
 			return m, m.loadPods()
+		}
+	case "/":
+		if !m.ShowHelp && !m.ShowConfirm && m.CurrentPanel == PanelList {
+			m.SearchActive = true
+			m.SearchQuery = ""
+			return m, nil
+		}
+	}
+
+	// Handle search input
+	if m.SearchActive {
+		switch msg.String() {
+		case "backspace":
+			if len(m.SearchQuery) > 0 {
+				m.SearchQuery = m.SearchQuery[:len(m.SearchQuery)-1]
+				m.Cursor = 0 // Reset cursor on query change
+			}
+			return m, nil
+		case "enter":
+			// Stay in search mode but could add special behavior here
+			return m, nil
+		default:
+			// Handle regular character input
+			if len(msg.String()) == 1 {
+				m.SearchQuery += msg.String()
+				m.Cursor = 0 // Reset cursor on query change
+				return m, nil
+			}
 		}
 	}
 
 	// Handle view switching
-	if !m.ShowHelp && !m.ShowConfirm {
+	if !m.ShowHelp && !m.ShowConfirm && !m.SearchActive {
 		switch msg.String() {
 		case "1":
 			m.CurrentView = ViewPods
@@ -442,7 +477,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Handle navigation
-	if !m.ShowHelp && !m.ShowConfirm {
+	if !m.ShowHelp && !m.ShowConfirm && !m.SearchActive {
 		switch msg.String() {
 		case "up", "k":
 			// If in log view, scroll up

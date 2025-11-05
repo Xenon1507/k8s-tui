@@ -10,6 +10,8 @@ import (
 	"github.com/Xenon1507/k8s-tui/internal/ui/models"
 	"github.com/Xenon1507/k8s-tui/internal/ui/styles"
 	"github.com/charmbracelet/lipgloss"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // View renders the main view
@@ -164,13 +166,33 @@ func renderPodsView(m models.Model) string {
 func renderPodsList(m models.Model) string {
 	var rows []string
 
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	}
+
 	// Table header
 	header := fmt.Sprintf("%-3s %-30s %-12s %-8s %-8s %-8s",
 		"", "NAME", "STATUS", "READY", "RESTARTS", "AGE")
 	rows = append(rows, styles.TableHeaderStyle.Render(header))
 
+	// Filter pods if search is active
+	filteredPods := m.Pods
+	if m.SearchQuery != "" {
+		filteredPods = []corev1.Pod{}
+		for _, pod := range m.Pods {
+			if matchesSearch(pod.Name, m.SearchQuery) ||
+			   matchesSearch(string(pod.Status.Phase), m.SearchQuery) ||
+			   matchesSearch(pod.Namespace, m.SearchQuery) {
+				filteredPods = append(filteredPods, pod)
+			}
+		}
+	}
+
 	// Table rows
-	for i, pod := range m.Pods {
+	for i, pod := range filteredPods {
 		status := k8s.GetPodStatus(&pod)
 
 		// Format age
@@ -203,7 +225,11 @@ func renderPodsList(m models.Model) string {
 	}
 
 	// Add count footer
-	countFooter := fmt.Sprintf("\n%d pods total", len(m.Pods))
+	totalStr := fmt.Sprintf("%d pods total", len(m.Pods))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d pods (filtered)", len(filteredPods), len(m.Pods))
+	}
+	countFooter := fmt.Sprintf("\n%s", totalStr)
 	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
 
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
@@ -602,13 +628,32 @@ func renderDeploymentsView(m models.Model) string {
 func renderDeploymentsList(m models.Model) string {
 	var rows []string
 
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	}
+
 	// Table header
 	header := fmt.Sprintf("%-3s %-35s %-12s %-15s %-8s",
 		"", "NAME", "READY", "UP-TO-DATE", "AGE")
 	rows = append(rows, styles.TableHeaderStyle.Render(header))
 
+	// Filter deployments if search is active
+	filteredDeployments := m.Deployments
+	if m.SearchQuery != "" {
+		filteredDeployments = []appsv1.Deployment{}
+		for _, deploy := range m.Deployments {
+			if matchesSearch(deploy.Name, m.SearchQuery) ||
+			   matchesSearch(deploy.Namespace, m.SearchQuery) {
+				filteredDeployments = append(filteredDeployments, deploy)
+			}
+		}
+	}
+
 	// Table rows
-	for i, deploy := range m.Deployments {
+	for i, deploy := range filteredDeployments {
 		// Calculate age
 		age := formatDuration(time.Since(deploy.CreationTimestamp.Time))
 
@@ -644,7 +689,11 @@ func renderDeploymentsList(m models.Model) string {
 	}
 
 	// Add count footer
-	countFooter := fmt.Sprintf("\n%d deployments total", len(m.Deployments))
+	totalStr := fmt.Sprintf("%d deployments total", len(m.Deployments))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d deployments (filtered)", len(filteredDeployments), len(m.Deployments))
+	}
+	countFooter := fmt.Sprintf("\n%s", totalStr)
 	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
 
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
@@ -789,13 +838,33 @@ func renderServicesView(m models.Model) string {
 func renderServicesList(m models.Model) string {
 	var rows []string
 
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	}
+
 	// Table header
 	header := fmt.Sprintf("%-3s %-30s %-15s %-15s %-20s %-8s",
 		"", "NAME", "TYPE", "CLUSTER-IP", "EXTERNAL-IP", "AGE")
 	rows = append(rows, styles.TableHeaderStyle.Render(header))
 
+	// Filter services if search is active
+	filteredServices := m.Services
+	if m.SearchQuery != "" {
+		filteredServices = []corev1.Service{}
+		for _, svc := range m.Services {
+			if matchesSearch(svc.Name, m.SearchQuery) ||
+			   matchesSearch(string(svc.Spec.Type), m.SearchQuery) ||
+			   matchesSearch(svc.Namespace, m.SearchQuery) {
+				filteredServices = append(filteredServices, svc)
+			}
+		}
+	}
+
 	// Table rows
-	for i, svc := range m.Services {
+	for i, svc := range filteredServices {
 		// Calculate age
 		age := formatDuration(time.Since(svc.CreationTimestamp.Time))
 
@@ -837,7 +906,11 @@ func renderServicesList(m models.Model) string {
 	}
 
 	// Add count footer
-	countFooter := fmt.Sprintf("\n%d services total", len(m.Services))
+	totalStr := fmt.Sprintf("%d services total", len(m.Services))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d services (filtered)", len(filteredServices), len(m.Services))
+	}
+	countFooter := fmt.Sprintf("\n%s", totalStr)
 	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
 
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
@@ -1010,13 +1083,46 @@ func renderNodesView(m models.Model) string {
 func renderNodesList(m models.Model) string {
 	var rows []string
 
+	// Show search bar if active
+	if m.SearchActive {
+		searchBar := fmt.Sprintf("Search: %s█", m.SearchQuery)
+		rows = append(rows, styles.SubHeaderStyle.Render(searchBar))
+		rows = append(rows, "")
+	}
+
 	// Table header
 	header := fmt.Sprintf("%-3s %-30s %-12s %-8s",
 		"", "NAME", "STATUS", "AGE")
 	rows = append(rows, styles.TableHeaderStyle.Render(header))
 
+	// Filter nodes if search is active
+	filteredNodes := m.Nodes
+	if m.SearchQuery != "" {
+		filteredNodes = []corev1.Node{}
+		for _, node := range m.Nodes {
+			// Check node name
+			if matchesSearch(node.Name, m.SearchQuery) {
+				filteredNodes = append(filteredNodes, node)
+				continue
+			}
+			// Check node status
+			for _, condition := range node.Status.Conditions {
+				if condition.Type == "Ready" {
+					status := "NotReady"
+					if condition.Status == "True" {
+						status = "Ready"
+					}
+					if matchesSearch(status, m.SearchQuery) {
+						filteredNodes = append(filteredNodes, node)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Table rows
-	for i, node := range m.Nodes {
+	for i, node := range filteredNodes {
 		// Calculate age
 		age := formatDuration(time.Since(node.CreationTimestamp.Time))
 
@@ -1054,7 +1160,11 @@ func renderNodesList(m models.Model) string {
 	}
 
 	// Add count footer
-	countFooter := fmt.Sprintf("\n%d nodes total", len(m.Nodes))
+	totalStr := fmt.Sprintf("%d nodes total", len(m.Nodes))
+	if m.SearchQuery != "" {
+		totalStr = fmt.Sprintf("%d/%d nodes (filtered)", len(filteredNodes), len(m.Nodes))
+	}
+	countFooter := fmt.Sprintf("\n%s", totalStr)
 	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
 
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
@@ -1198,4 +1308,12 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// matchesSearch checks if a string contains the search query (case-insensitive)
+func matchesSearch(text, query string) bool {
+	if query == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(text), strings.ToLower(query))
 }
