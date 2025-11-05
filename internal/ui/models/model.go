@@ -1,8 +1,10 @@
 package models
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/Xenon1507/k8s-tui/internal/config"
@@ -97,6 +99,12 @@ type NamespacesLoadedMsg struct{
 	Err        error
 }
 
+// LogsLoadedMsg is sent when pod logs are loaded
+type LogsLoadedMsg struct {
+	Logs []string
+	Err  error
+}
+
 // ErrorMsg represents an error message
 type ErrorMsg struct {
 	Err error
@@ -180,6 +188,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.Namespaces = msg.Namespaces
+		return m, nil
+
+	case LogsLoadedMsg:
+		m.Loading = false
+		if msg.Err != nil {
+			m.ErrorMessage = fmt.Sprintf("Error loading logs: %v", msg.Err)
+			return m, nil
+		}
+		m.Logs = msg.Logs
+		m.ErrorMessage = ""
 		return m, nil
 
 	case ErrorMsg:
@@ -290,6 +308,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.CurrentView == ViewPods && len(m.Pods) > 0 {
 				m.CurrentPanel = PanelLogs
 				m.SelectedPod = &m.Pods[m.Cursor]
+				m.Loading = true
+				m.Logs = []string{} // Clear old logs
 				return m, m.loadLogs()
 			}
 		case "d":
@@ -379,10 +399,53 @@ func (m Model) loadLogs() tea.Cmd {
 	if m.SelectedPod == nil {
 		return nil
 	}
+
+	pod := m.SelectedPod
+	tailLines := int64(m.config.LogTailLines)
+
 	return func() tea.Msg {
-		// For now, return a placeholder
-		// In a full implementation, we would stream logs
-		return nil
+		ctx := context.Background()
+
+		// Get the first container name
+		containerName := ""
+		if len(pod.Spec.Containers) > 0 {
+			containerName = pod.Spec.Containers[0].Name
+		}
+
+		// Get logs stream
+		stream, err := m.client.GetPodLogs(ctx, pod.Namespace, pod.Name, containerName, tailLines, false, false)
+		if err != nil {
+			return LogsLoadedMsg{Logs: nil, Err: fmt.Errorf("failed to get logs: %w", err)}
+		}
+		defer stream.Close()
+
+		// Read logs from stream
+		var logs []string
+		scanner := bufio.NewScanner(stream)
+
+		// Limit to prevent memory issues with huge logs
+		maxLines := 1000
+		lineCount := 0
+
+		for scanner.Scan() && lineCount < maxLines {
+			line := scanner.Text()
+			logs = append(logs, line)
+			lineCount++
+		}
+
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			return LogsLoadedMsg{Logs: logs, Err: fmt.Errorf("error reading logs: %w", err)}
+		}
+
+		if lineCount >= maxLines {
+			logs = append(logs, fmt.Sprintf("\n... (showing first %d lines, use kubectl for full logs)", maxLines))
+		}
+
+		if len(logs) == 0 {
+			logs = []string{"No logs available for this pod."}
+		}
+
+		return LogsLoadedMsg{Logs: logs, Err: nil}
 	}
 }
 

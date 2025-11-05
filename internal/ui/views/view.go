@@ -261,13 +261,30 @@ func renderPodLogs(m models.Model) string {
 	}
 
 	pod := m.SelectedPod
-	header := styles.LogHeaderStyle.Render(fmt.Sprintf("Logs: %s", pod.Name))
 
-	logsContent := "Press 'esc' to close\n\n"
-	if len(m.Logs) > 0 {
-		logsContent += strings.Join(m.Logs, "\n")
+	// Get container info
+	containerInfo := ""
+	if len(pod.Spec.Containers) > 0 {
+		containerInfo = fmt.Sprintf(" (container: %s)", pod.Spec.Containers[0].Name)
+	}
+
+	header := styles.LogHeaderStyle.Render(fmt.Sprintf("Logs: %s%s", pod.Name, containerInfo))
+
+	var logsContent string
+
+	if m.Loading {
+		logsContent = "Loading logs...\n\nPlease wait..."
+	} else if m.ErrorMessage != "" {
+		logsContent = styles.ErrorStyle.Render(m.ErrorMessage)
+	} else if len(m.Logs) > 0 {
+		// Join logs with proper formatting
+		logsContent = strings.Join(m.Logs, "\n")
+
+		// Add helpful footer
+		footer := fmt.Sprintf("\n\n[%d lines] Press 'esc' to close", len(m.Logs))
+		logsContent += styles.HelpDescStyle.Render(footer)
 	} else {
-		logsContent += "Loading logs..."
+		logsContent = "No logs available for this pod."
 	}
 
 	return styles.ActivePanelStyle.Render(header + "\n\n" + logsContent)
