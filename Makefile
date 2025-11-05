@@ -42,7 +42,11 @@ build:
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
 ## install: Install the binary to /usr/local/bin
-install: build
+install:
+	@if [ ! -f "$(BUILD_DIR)/$(BINARY_NAME)" ]; then \
+		echo "Error: Binary not found. Please run 'make build' first (without sudo)"; \
+		exit 1; \
+	fi
 	@echo "Installing $(BINARY_NAME) to /usr/local/bin..."
 	@install -m 755 $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/$(BINARY_NAME)
 	@echo "Installation complete"
