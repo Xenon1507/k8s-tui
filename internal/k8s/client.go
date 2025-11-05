@@ -119,6 +119,21 @@ func (c *Client) GetPods(ctx context.Context, namespace string) ([]corev1.Pod, e
 	return list.Items, nil
 }
 
+// GetPodsByLabelSelector returns pods matching the label selector
+func (c *Client) GetPodsByLabelSelector(ctx context.Context, namespace string, labelSelector string) ([]corev1.Pod, error) {
+	if namespace == "" {
+		namespace = corev1.NamespaceAll
+	}
+
+	list, err := c.clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
 // GetPod returns a specific pod
 func (c *Client) GetPod(ctx context.Context, namespace, name string) (*corev1.Pod, error) {
 	return c.clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})

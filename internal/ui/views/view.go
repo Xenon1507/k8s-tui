@@ -542,8 +542,13 @@ func renderHelp(m models.Model) string {
 	)
 }
 
-// renderDeploymentsView renders the deployments list view
+// renderDeploymentsView renders the deployments view with detail/log panels
 func renderDeploymentsView(m models.Model) string {
+	// If viewing logs, show full-screen log view
+	if m.CurrentPanel == models.PanelLogs {
+		return renderPodLogsFullScreen(m) // Reuse the same log viewer
+	}
+
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading deployments...")
 	}
@@ -556,6 +561,41 @@ func renderDeploymentsView(m models.Model) string {
 		return styles.PanelStyle.Render("No deployments found")
 	}
 
+	// Split view: List on left, details on right
+	listView := renderDeploymentsList(m)
+
+	var detailView string
+	switch m.CurrentPanel {
+	case models.PanelDetail:
+		detailView = renderDeploymentDetail(m)
+	default:
+		detailView = styles.PanelStyle.Render("Select a deployment and press Enter for details, or 'l' for logs")
+	}
+
+	// Calculate available height
+	availableHeight := m.Height - 10
+	if availableHeight < 20 {
+		availableHeight = 20
+	}
+
+	listWidth := m.Width / 2
+	detailWidth := m.Width - listWidth - 4
+
+	listView = lipgloss.NewStyle().
+		Width(listWidth).
+		Height(availableHeight).
+		Render(listView)
+
+	detailView = lipgloss.NewStyle().
+		Width(detailWidth).
+		Height(availableHeight).
+		Render(detailView)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detailView)
+}
+
+// renderDeploymentsList renders the deployments list
+func renderDeploymentsList(m models.Model) string {
 	var rows []string
 
 	// Table header
@@ -606,7 +646,95 @@ func renderDeploymentsView(m models.Model) string {
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
 }
 
-// renderServicesView renders the services list view
+// renderDeploymentDetail renders deployment details
+func renderDeploymentDetail(m models.Model) string {
+	if m.SelectedDeployment == nil {
+		return styles.PanelStyle.Render("No deployment selected")
+	}
+
+	deploy := m.SelectedDeployment
+
+	var details []string
+	details = append(details, styles.SubHeaderStyle.Render(fmt.Sprintf("Deployment: %s", deploy.Name)))
+	details = append(details, "")
+	details = append(details, fmt.Sprintf("Namespace: %s", deploy.Namespace))
+	details = append(details, fmt.Sprintf("Replicas: %d", deploy.Status.Replicas))
+	details = append(details, fmt.Sprintf("Ready: %d/%d", deploy.Status.ReadyReplicas, deploy.Status.Replicas))
+	details = append(details, fmt.Sprintf("Up-to-date: %d", deploy.Status.UpdatedReplicas))
+	details = append(details, fmt.Sprintf("Available: %d", deploy.Status.AvailableReplicas))
+	details = append(details, fmt.Sprintf("Age: %s", formatDuration(time.Since(deploy.CreationTimestamp.Time))))
+	details = append(details, "")
+
+	// Strategy
+	details = append(details, styles.SubHeaderStyle.Render("Strategy:"))
+	details = append(details, fmt.Sprintf("  Type: %s", deploy.Spec.Strategy.Type))
+	if deploy.Spec.Strategy.RollingUpdate != nil {
+		details = append(details, fmt.Sprintf("  Max Unavailable: %v", deploy.Spec.Strategy.RollingUpdate.MaxUnavailable))
+		details = append(details, fmt.Sprintf("  Max Surge: %v", deploy.Spec.Strategy.RollingUpdate.MaxSurge))
+	}
+	details = append(details, "")
+
+	// Selector
+	if deploy.Spec.Selector != nil && len(deploy.Spec.Selector.MatchLabels) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Selector:"))
+		for k, v := range deploy.Spec.Selector.MatchLabels {
+			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		}
+		details = append(details, "")
+	}
+
+	// Labels
+	if len(deploy.Labels) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Labels:"))
+		for k, v := range deploy.Labels {
+			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		}
+		details = append(details, "")
+	}
+
+	// Containers
+	if len(deploy.Spec.Template.Spec.Containers) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Containers:"))
+		for _, container := range deploy.Spec.Template.Spec.Containers {
+			details = append(details, fmt.Sprintf("  ● %s", container.Name))
+			details = append(details, fmt.Sprintf("    Image: %s", container.Image))
+			if len(container.Ports) > 0 {
+				ports := ""
+				for i, port := range container.Ports {
+					if i > 0 {
+						ports += ", "
+					}
+					ports += fmt.Sprintf("%d/%s", port.ContainerPort, port.Protocol)
+				}
+				details = append(details, fmt.Sprintf("    Ports: %s", ports))
+			}
+		}
+	}
+
+	// Conditions
+	if len(deploy.Status.Conditions) > 0 {
+		details = append(details, "")
+		details = append(details, styles.SubHeaderStyle.Render("Conditions:"))
+		for _, cond := range deploy.Status.Conditions {
+			status := "✓"
+			if cond.Status != "True" {
+				status = "✗"
+			}
+			details = append(details, fmt.Sprintf("  %s %s: %s", status, cond.Type, cond.Status))
+			if cond.Message != "" {
+				msg := cond.Message
+				if len(msg) > 60 {
+					msg = msg[:57] + "..."
+				}
+				details = append(details, fmt.Sprintf("    %s", msg))
+			}
+		}
+	}
+
+	return styles.ActivePanelStyle.Render(strings.Join(details, "\n"))
+}
+
+// renderServicesView renders the services view with detail panel
 func renderServicesView(m models.Model) string {
 	if m.Loading {
 		return styles.PanelStyle.Render("Loading services...")
@@ -620,6 +748,41 @@ func renderServicesView(m models.Model) string {
 		return styles.PanelStyle.Render("No services found")
 	}
 
+	// Split view: List on left, details on right
+	listView := renderServicesList(m)
+
+	var detailView string
+	switch m.CurrentPanel {
+	case models.PanelDetail:
+		detailView = renderServiceDetail(m)
+	default:
+		detailView = styles.PanelStyle.Render("Select a service and press Enter for details")
+	}
+
+	// Calculate available height
+	availableHeight := m.Height - 10
+	if availableHeight < 20 {
+		availableHeight = 20
+	}
+
+	listWidth := m.Width / 2
+	detailWidth := m.Width - listWidth - 4
+
+	listView = lipgloss.NewStyle().
+		Width(listWidth).
+		Height(availableHeight).
+		Render(listView)
+
+	detailView = lipgloss.NewStyle().
+		Width(detailWidth).
+		Height(availableHeight).
+		Render(detailView)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, listView, detailView)
+}
+
+// renderServicesList renders the services list
+func renderServicesList(m models.Model) string {
 	var rows []string
 
 	// Table header
@@ -674,6 +837,97 @@ func renderServicesView(m models.Model) string {
 	rows = append(rows, styles.HelpDescStyle.Render(countFooter))
 
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
+}
+
+// renderServiceDetail renders service details
+func renderServiceDetail(m models.Model) string {
+	if m.SelectedService == nil {
+		return styles.PanelStyle.Render("No service selected")
+	}
+
+	svc := m.SelectedService
+
+	var details []string
+	details = append(details, styles.SubHeaderStyle.Render(fmt.Sprintf("Service: %s", svc.Name)))
+	details = append(details, "")
+	details = append(details, fmt.Sprintf("Namespace: %s", svc.Namespace))
+	details = append(details, fmt.Sprintf("Type: %s", svc.Spec.Type))
+	details = append(details, fmt.Sprintf("Cluster IP: %s", svc.Spec.ClusterIP))
+	details = append(details, fmt.Sprintf("Age: %s", formatDuration(time.Since(svc.CreationTimestamp.Time))))
+	details = append(details, "")
+
+	// External IPs
+	if len(svc.Spec.ExternalIPs) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("External IPs:"))
+		for _, ip := range svc.Spec.ExternalIPs {
+			details = append(details, fmt.Sprintf("  %s", ip))
+		}
+		details = append(details, "")
+	}
+
+	// Load Balancer Ingress
+	if len(svc.Status.LoadBalancer.Ingress) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Load Balancer Ingress:"))
+		for _, ing := range svc.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				details = append(details, fmt.Sprintf("  IP: %s", ing.IP))
+			}
+			if ing.Hostname != "" {
+				details = append(details, fmt.Sprintf("  Hostname: %s", ing.Hostname))
+			}
+		}
+		details = append(details, "")
+	}
+
+	// Ports
+	if len(svc.Spec.Ports) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Ports:"))
+		for _, port := range svc.Spec.Ports {
+			portStr := fmt.Sprintf("  %s: %d", port.Name, port.Port)
+			if port.TargetPort.IntVal > 0 {
+				portStr += fmt.Sprintf(" -> %d", port.TargetPort.IntVal)
+			} else if port.TargetPort.StrVal != "" {
+				portStr += fmt.Sprintf(" -> %s", port.TargetPort.StrVal)
+			}
+			portStr += fmt.Sprintf("/%s", port.Protocol)
+			if port.NodePort > 0 {
+				portStr += fmt.Sprintf(" (NodePort: %d)", port.NodePort)
+			}
+			details = append(details, portStr)
+		}
+		details = append(details, "")
+	}
+
+	// Selector
+	if len(svc.Spec.Selector) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Selector:"))
+		for k, v := range svc.Spec.Selector {
+			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		}
+		details = append(details, "")
+	}
+
+	// Labels
+	if len(svc.Labels) > 0 {
+		details = append(details, styles.SubHeaderStyle.Render("Labels:"))
+		for k, v := range svc.Labels {
+			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		}
+		details = append(details, "")
+	}
+
+	// Session Affinity
+	if svc.Spec.SessionAffinity != "" {
+		details = append(details, styles.SubHeaderStyle.Render("Session Affinity:"))
+		details = append(details, fmt.Sprintf("  %s", svc.Spec.SessionAffinity))
+		if svc.Spec.SessionAffinityConfig != nil && svc.Spec.SessionAffinityConfig.ClientIP != nil {
+			if svc.Spec.SessionAffinityConfig.ClientIP.TimeoutSeconds != nil {
+				details = append(details, fmt.Sprintf("  Timeout: %d seconds", *svc.Spec.SessionAffinityConfig.ClientIP.TimeoutSeconds))
+			}
+		}
+	}
+
+	return styles.ActivePanelStyle.Render(strings.Join(details, "\n"))
 }
 
 // formatDuration formats a duration in a human-readable way

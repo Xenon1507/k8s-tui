@@ -56,14 +56,16 @@ type Model struct {
 	AllNamespaces    bool
 
 	// Data (exported for view access)
-	Pods         []corev1.Pod
-	Deployments  []appsv1.Deployment
-	Services     []corev1.Service
-	Namespaces   []corev1.Namespace
-	Contexts     []string
-	SelectedPod  *corev1.Pod
-	PodEvents    []corev1.Event
-	Logs         []string
+	Pods               []corev1.Pod
+	Deployments        []appsv1.Deployment
+	Services           []corev1.Service
+	Namespaces         []corev1.Namespace
+	Contexts           []string
+	SelectedPod        *corev1.Pod
+	SelectedDeployment *appsv1.Deployment
+	SelectedService    *corev1.Service
+	PodEvents          []corev1.Event
+	Logs               []string
 
 	// UI state (exported for view access)
 	Cursor         int
@@ -530,6 +532,14 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.LogViewOffset = 0 // Reset scroll position
 				return m, m.loadLogs()
 			}
+			if m.CurrentView == ViewDeployments && len(m.Deployments) > 0 {
+				m.SelectedDeployment = &m.Deployments[m.Cursor]
+				m.CurrentPanel = PanelLogs
+				m.Loading = true
+				m.Logs = []string{} // Clear old logs
+				m.LogViewOffset = 0 // Reset scroll position
+				return m, m.loadDeploymentLogs()
+			}
 		case "d":
 			if m.CurrentView == ViewPods && len(m.Pods) > 0 {
 				m.ShowConfirm = true
@@ -549,6 +559,18 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.SelectedPod = &m.Pods[m.Cursor]
 		m.CurrentPanel = PanelDetail
 		return m, m.loadPodEvents()
+	}
+
+	if m.CurrentView == ViewDeployments && len(m.Deployments) > 0 {
+		m.SelectedDeployment = &m.Deployments[m.Cursor]
+		m.CurrentPanel = PanelDetail
+		return m, nil
+	}
+
+	if m.CurrentView == ViewServices && len(m.Services) > 0 {
+		m.SelectedService = &m.Services[m.Cursor]
+		m.CurrentPanel = PanelDetail
+		return m, nil
 	}
 
 	if m.CurrentView == ViewNamespaces && len(m.Namespaces) > 0 {
@@ -779,6 +801,103 @@ func (m Model) loadLogs() tea.Cmd {
 
 		if len(logs) == 0 {
 			logs = []string{"No logs available for this pod."}
+		}
+
+		return LogsLoadedMsg{Logs: logs, Err: nil}
+	}
+}
+
+// loadDeploymentLogs loads logs from a deployment's first available pod
+func (m Model) loadDeploymentLogs() tea.Cmd {
+	if m.SelectedDeployment == nil {
+		return nil
+	}
+
+	deployment := m.SelectedDeployment
+	tailLines := int64(m.config.LogTailLines)
+
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Build label selector from deployment selector
+		labelSelector := ""
+		if deployment.Spec.Selector != nil && deployment.Spec.Selector.MatchLabels != nil {
+			for key, value := range deployment.Spec.Selector.MatchLabels {
+				if labelSelector != "" {
+					labelSelector += ","
+				}
+				labelSelector += fmt.Sprintf("%s=%s", key, value)
+			}
+		}
+
+		if labelSelector == "" {
+			return LogsLoadedMsg{Logs: nil, Err: fmt.Errorf("deployment has no label selector")}
+		}
+
+		// Get pods for this deployment
+		pods, err := m.client.GetPodsByLabelSelector(ctx, deployment.Namespace, labelSelector)
+		if err != nil {
+			return LogsLoadedMsg{Logs: nil, Err: fmt.Errorf("failed to get deployment pods: %w", err)}
+		}
+
+		if len(pods) == 0 {
+			return LogsLoadedMsg{Logs: []string{"No pods found for this deployment"}, Err: nil}
+		}
+
+		// Find first running pod
+		var selectedPod *corev1.Pod
+		for i := range pods {
+			if pods[i].Status.Phase == corev1.PodRunning {
+				selectedPod = &pods[i]
+				break
+			}
+		}
+
+		// If no running pod, use the first pod
+		if selectedPod == nil {
+			selectedPod = &pods[0]
+		}
+
+		// Get the first container name
+		containerName := ""
+		if len(selectedPod.Spec.Containers) > 0 {
+			containerName = selectedPod.Spec.Containers[0].Name
+		}
+
+		// Get logs stream
+		stream, err := m.client.GetPodLogs(ctx, selectedPod.Namespace, selectedPod.Name, containerName, tailLines, false, false)
+		if err != nil {
+			return LogsLoadedMsg{Logs: nil, Err: fmt.Errorf("failed to get logs from pod %s: %w", selectedPod.Name, err)}
+		}
+		defer stream.Close()
+
+		// Read logs from stream
+		var logs []string
+		logs = append(logs, fmt.Sprintf("# Logs from deployment: %s (pod: %s)", deployment.Name, selectedPod.Name))
+		logs = append(logs, "")
+
+		scanner := bufio.NewScanner(stream)
+
+		// Limit to prevent memory issues with huge logs
+		maxLines := 1000
+		lineCount := 0
+
+		for scanner.Scan() && lineCount < maxLines {
+			line := scanner.Text()
+			logs = append(logs, line)
+			lineCount++
+		}
+
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			return LogsLoadedMsg{Logs: logs, Err: fmt.Errorf("error reading logs: %w", err)}
+		}
+
+		if lineCount >= maxLines {
+			logs = append(logs, fmt.Sprintf("\n... (showing first %d lines, use kubectl for full logs)", maxLines))
+		}
+
+		if len(logs) <= 2 { // Only header lines
+			logs = append(logs, "No logs available for this deployment.")
 		}
 
 		return LogsLoadedMsg{Logs: logs, Err: nil}
