@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -269,8 +270,8 @@ func renderPodDetail(m models.Model) string {
 	if len(pod.Labels) > 0 {
 		details = append(details, "")
 		details = append(details, styles.SubHeaderStyle.Render("Labels:"))
-		for k, v := range pod.Labels {
-			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		for _, k := range getSortedMapKeys(pod.Labels) {
+			details = append(details, fmt.Sprintf("  %s: %s", k, pod.Labels[k]))
 		}
 	}
 
@@ -677,8 +678,8 @@ func renderDeploymentDetail(m models.Model) string {
 	// Selector
 	if deploy.Spec.Selector != nil && len(deploy.Spec.Selector.MatchLabels) > 0 {
 		details = append(details, styles.SubHeaderStyle.Render("Selector:"))
-		for k, v := range deploy.Spec.Selector.MatchLabels {
-			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		for _, k := range getSortedMapKeys(deploy.Spec.Selector.MatchLabels) {
+			details = append(details, fmt.Sprintf("  %s: %s", k, deploy.Spec.Selector.MatchLabels[k]))
 		}
 		details = append(details, "")
 	}
@@ -686,8 +687,8 @@ func renderDeploymentDetail(m models.Model) string {
 	// Labels
 	if len(deploy.Labels) > 0 {
 		details = append(details, styles.SubHeaderStyle.Render("Labels:"))
-		for k, v := range deploy.Labels {
-			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		for _, k := range getSortedMapKeys(deploy.Labels) {
+			details = append(details, fmt.Sprintf("  %s: %s", k, deploy.Labels[k]))
 		}
 		details = append(details, "")
 	}
@@ -901,8 +902,8 @@ func renderServiceDetail(m models.Model) string {
 	// Selector
 	if len(svc.Spec.Selector) > 0 {
 		details = append(details, styles.SubHeaderStyle.Render("Selector:"))
-		for k, v := range svc.Spec.Selector {
-			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		for _, k := range getSortedMapKeys(svc.Spec.Selector) {
+			details = append(details, fmt.Sprintf("  %s: %s", k, svc.Spec.Selector[k]))
 		}
 		details = append(details, "")
 	}
@@ -910,8 +911,8 @@ func renderServiceDetail(m models.Model) string {
 	// Labels
 	if len(svc.Labels) > 0 {
 		details = append(details, styles.SubHeaderStyle.Render("Labels:"))
-		for k, v := range svc.Labels {
-			details = append(details, fmt.Sprintf("  %s: %s", k, v))
+		for _, k := range getSortedMapKeys(svc.Labels) {
+			details = append(details, fmt.Sprintf("  %s: %s", k, svc.Labels[k]))
 		}
 		details = append(details, "")
 	}
@@ -942,4 +943,15 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// getSortedMapKeys returns sorted keys from a map[string]string
+// This ensures deterministic ordering when displaying labels/selectors
+func getSortedMapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
