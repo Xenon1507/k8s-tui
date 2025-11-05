@@ -391,6 +391,11 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.CurrentNamespace = m.Namespaces[m.Cursor].Name
 		m.CurrentView = ViewPods
 		m.Cursor = 0
+		m.Loading = true
+		// Clear old data
+		m.Pods = []corev1.Pod{}
+		m.Deployments = []appsv1.Deployment{}
+		m.Services = []corev1.Service{}
 		return m, m.loadPods()
 	}
 
@@ -401,11 +406,24 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.ErrorMessage = fmt.Sprintf("Error switching context: %v", err)
 			return m, nil
 		}
+
+		// Update context and reset namespace to default
 		m.CurrentContext = newContext
+		m.CurrentNamespace = "default"
+		m.Contexts = m.client.GetContexts() // Refresh contexts list
+
+		// Go to pods view
 		m.CurrentView = ViewPods
 		m.Cursor = 0
 		m.Loading = true
-		// Reload namespaces for new context
+
+		// Clear old data
+		m.Pods = []corev1.Pod{}
+		m.Namespaces = []corev1.Namespace{}
+		m.Deployments = []appsv1.Deployment{}
+		m.Services = []corev1.Service{}
+
+		// Reload all data for new context
 		return m, tea.Batch(
 			m.loadNamespaces(),
 			m.loadPods(),
