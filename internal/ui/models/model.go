@@ -82,6 +82,9 @@ type Model struct {
 	// Log viewer state
 	LogViewOffset int // Scroll offset for log viewer
 
+	// List viewer state
+	ListViewOffset int // Scroll offset for lists (namespaces, contexts, etc.)
+
 	// Refresh
 	lastRefresh time.Time
 	autoRefresh bool
@@ -306,25 +309,30 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "1":
 			m.CurrentView = ViewPods
 			m.Cursor = 0
+			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadPods()
 		case "2":
 			m.CurrentView = ViewDeployments
 			m.Cursor = 0
+			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadDeployments()
 		case "3":
 			m.CurrentView = ViewServices
 			m.Cursor = 0
+			m.ListViewOffset = 0
 			m.Loading = true
 			return m, m.loadServices()
 		case "n":
 			m.CurrentView = ViewNamespaces
 			m.Cursor = 0
+			m.ListViewOffset = 0
 			return m, nil
 		case "c":
 			m.CurrentView = ViewContexts
 			m.Cursor = 0
+			m.ListViewOffset = 0
 			return m, nil
 		case "a":
 			m.AllNamespaces = !m.AllNamespaces
@@ -347,6 +355,10 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Otherwise move cursor
 			if m.Cursor > 0 {
 				m.Cursor--
+				// Adjust viewport if cursor goes above visible area
+				if m.Cursor < m.ListViewOffset {
+					m.ListViewOffset = m.Cursor
+				}
 			}
 			return m, nil
 		case "down", "j":
@@ -382,6 +394,14 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if m.Cursor < maxCursor {
 				m.Cursor++
+				// Adjust viewport if cursor goes below visible area
+				visibleLines := m.Height - 12 // Account for header, footer, margins
+				if visibleLines < 10 {
+					visibleLines = 10
+				}
+				if m.Cursor >= m.ListViewOffset+visibleLines {
+					m.ListViewOffset = m.Cursor - visibleLines + 1
+				}
 			}
 			return m, nil
 		case "pgup":

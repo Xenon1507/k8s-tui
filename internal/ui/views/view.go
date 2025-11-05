@@ -238,6 +238,31 @@ func renderPodDetail(m models.Model) string {
 			container.Name,
 			container.RestartCount,
 		))
+
+		// Find matching spec container for image info
+		for _, specContainer := range pod.Spec.Containers {
+			if specContainer.Name == container.Name {
+				details = append(details, fmt.Sprintf("    Image: %s", specContainer.Image))
+				if container.ImageID != "" {
+					// Extract digest from ImageID (format: docker-pullable://image@sha256:...)
+					imageID := container.ImageID
+					if idx := strings.Index(imageID, "@"); idx != -1 {
+						digest := imageID[idx+1:]
+						// Truncate long digests for readability
+						if len(digest) > 71 {
+							digest = digest[:71] + "..."
+						}
+						details = append(details, fmt.Sprintf("    Digest: %s", digest))
+					} else if len(imageID) > 60 {
+						// Show truncated ImageID if no digest
+						details = append(details, fmt.Sprintf("    ImageID: %s...", imageID[:57]))
+					} else {
+						details = append(details, fmt.Sprintf("    ImageID: %s", imageID))
+					}
+				}
+				break
+			}
+		}
 	}
 
 	// Labels
@@ -342,37 +367,95 @@ func renderPodLogsFullScreen(m models.Model) string {
 		Render(fullContent)
 }
 
-// renderNamespacesView renders the namespaces list
+// renderNamespacesView renders the namespaces list with scrolling
 func renderNamespacesView(m models.Model) string {
 	var rows []string
 
 	rows = append(rows, styles.SubHeaderStyle.Render("Select a namespace:"))
 	rows = append(rows, "")
 
-	for i, ns := range m.Namespaces {
+	// Calculate visible area
+	availableHeight := m.Height - 10 // Account for header, footer, margins
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	totalItems := len(m.Namespaces)
+	if totalItems == 0 {
+		return styles.PanelStyle.Render("No namespaces found")
+	}
+
+	// Calculate visible slice
+	startIdx := m.ListViewOffset
+	endIdx := startIdx + availableHeight
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+
+	// Ensure cursor is within bounds
+	if startIdx >= totalItems {
+		startIdx = 0
+	}
+
+	visibleNamespaces := m.Namespaces[startIdx:endIdx]
+
+	for i, ns := range visibleNamespaces {
+		actualIdx := startIdx + i
 		name := ns.Name
 		age := formatDuration(time.Since(ns.CreationTimestamp.Time))
 
 		row := fmt.Sprintf("%s (age: %s)", name, age)
 
-		if i == m.Cursor {
+		if actualIdx == m.Cursor {
 			rows = append(rows, styles.TableSelectedStyle.Render("▶ "+row))
 		} else {
 			rows = append(rows, "  "+row)
 		}
 	}
 
+	// Add scroll indicator
+	if totalItems > availableHeight {
+		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %d] Use ↑↓ to scroll",
+			startIdx+1, endIdx, totalItems)
+		rows = append(rows, styles.HelpDescStyle.Render(scrollInfo))
+	}
+
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
 }
 
-// renderContextsView renders the contexts list
+// renderContextsView renders the contexts list with scrolling
 func renderContextsView(m models.Model) string {
 	var rows []string
 
 	rows = append(rows, styles.SubHeaderStyle.Render("Select a context:"))
 	rows = append(rows, "")
 
-	for i, ctx := range m.Contexts {
+	// Calculate visible area
+	availableHeight := m.Height - 10
+	if availableHeight < 10 {
+		availableHeight = 10
+	}
+
+	totalItems := len(m.Contexts)
+	if totalItems == 0 {
+		return styles.PanelStyle.Render("No contexts found")
+	}
+
+	// Calculate visible slice
+	startIdx := m.ListViewOffset
+	endIdx := startIdx + availableHeight
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+
+	if startIdx >= totalItems {
+		startIdx = 0
+	}
+
+	visibleContexts := m.Contexts[startIdx:endIdx]
+
+	for i, ctx := range visibleContexts {
+		actualIdx := startIdx + i
 		marker := " "
 		if ctx == m.CurrentContext {
 			marker = "*"
@@ -380,11 +463,18 @@ func renderContextsView(m models.Model) string {
 
 		row := fmt.Sprintf("%s %s", marker, ctx)
 
-		if i == m.Cursor {
+		if actualIdx == m.Cursor {
 			rows = append(rows, styles.TableSelectedStyle.Render("▶ "+row))
 		} else {
 			rows = append(rows, "  "+row)
 		}
+	}
+
+	// Add scroll indicator
+	if totalItems > availableHeight {
+		scrollInfo := fmt.Sprintf("\n[Showing %d-%d of %d] Use ↑↓ to scroll",
+			startIdx+1, endIdx, totalItems)
+		rows = append(rows, styles.HelpDescStyle.Render(scrollInfo))
 	}
 
 	return styles.PanelStyle.Render(strings.Join(rows, "\n"))
